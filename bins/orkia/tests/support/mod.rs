@@ -50,7 +50,16 @@ done
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700))
             .expect("chmod fake agent");
     }
-    std::fs::write(orkia_dir.join("config.toml"), "").expect("write config");
+    // The 250ms default IPC read timeout is tuned for a responsive local
+    // daemon. Under a loaded CI runner (the full `--workspace` suite running
+    // in parallel) a `tell` round-trip — which drives real PTY injection —
+    // overruns it, surfacing as EAGAIN. Give the test a generous timeout so
+    // these daemon round-trip assertions exercise correctness, not runner load.
+    std::fs::write(
+        orkia_dir.join("config.toml"),
+        "[daemon]\nipc_timeout_ms = 5000\n",
+    )
+    .expect("write config");
     write_agent_definition(orkia_dir, "echo", "test", &script.display().to_string());
 }
 
