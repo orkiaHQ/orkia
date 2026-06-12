@@ -1,0 +1,8 @@
+# `cross` runs builds inside a container and does NOT forward host env
+# vars unless listed here. Both of these are compile-time inputs
+# (option_env!) for release binaries:
+# - ORKIA_BUILD_COMMIT: stamped commit for `orkia update --check`
+# - ORKIA_KERNEL_PUBKEY_HEX: kernel-trust anchor; release builds FAIL
+#   to compile without it (SEC-003 assert in orkia-kernel-trust)
+[build.env]
+passthrough = ["ORKIA_BUILD_COMMIT", "ORKIA_KERNEL_PUBKEY_HEX"]

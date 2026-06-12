@@ -1,0 +1,23 @@
+#
+# Purpose: grant the `orkia-cage` launcher permission to create UNPRIVILEGED
+# user namespaces on kernels that restrict them — notably Ubuntu 24.04+, where
+# `kernel.apparmor_restrict_unprivileged_userns=1` denies `unshare(CLONE_NEWUSER)`
+# to unconfined binaries (`uid_map: Operation not permitted`).
+#
+# orkia-cage is otherwise left **unconfined**: it does its own sandboxing
+# (user+mount namespaces, minimal-rootfs, pivot_root). This profile ONLY lifts
+# the userns gate, and ONLY for the specific binary at @EXEC_PATH@ — it does not
+# grant userns to anything else. This is the correct, narrow prod fix; the
+# `sysctl …=0` toggle is the dev-loop hatch only.
+#
+# `@EXEC_PATH@` is substituted with the resolved binary path by install.sh.
+abi <abi/4.0>,
+
+include <tunables/global>
+
+profile orkia-cage @EXEC_PATH@ flags=(unconfined) {
+  userns,
+
+  # Site-local additions / overrides, if any.
+  include if exists <local/orkia-cage>
+}

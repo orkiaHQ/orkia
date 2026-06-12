@@ -1,0 +1,31 @@
+[package]
+name = "orkia-plugin-build"
+version = "0.1.0"
+edition.workspace = true
+license = "Apache-2.0"
+description = "SPEC-ORKIA-PLUGIN-TS-V1 §6: the TS/JS → QuickJS-WASM plugin compiler (separate artifact, not in the default orkia binary)"
+
+# The compiler artifact pulled on demand (§2.1 / §6.1). Ships the `orkia-compiler`
+# binary; never linked into the default `orkia` binary.
+[[bin]]
+name = "orkia-compiler"
+path = "src/bin/orkia-compiler.rs"
+
+[dependencies]
+# OXC: TypeScript → JavaScript (type stripping + lowering). ~2 MB, MSRV 1.90.
+oxc = { workspace = true }
+# Cranelift IS expected here — this is the compiler artifact, not the runtime.
+wasmtime = { version = "44", default-features = false, features = ["runtime", "cranelift"] }
+sha2 = { workspace = true }
+hex = { workspace = true }
+ureq = { workspace = true }
+flate2 = "1"
+tempfile = "3"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# Run the compiled `.cwasm` through the real runtime in the e2e test.
+orkia-plugin = { workspace = true }
+serde_json = { workspace = true }

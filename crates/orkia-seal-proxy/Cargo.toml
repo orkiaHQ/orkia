@@ -1,0 +1,12 @@
+[package]
+name = "orkia-seal-proxy"
+version = "0.1.0"
+edition.workspace = true
+license = "Elastic-2.0"
+description = "OSS RfcSealAssembler that performs per-RFC SEAL v1 assembly by asking orkia-kernel to run the premium signing operation"
+
+[dependencies]
+orkia-shell-types = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }

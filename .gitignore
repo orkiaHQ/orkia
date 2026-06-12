@@ -1,0 +1,51 @@
+# Rust build output. Use a recursive rule so nested package/workspace targets
+# such as crates/*/target never enter a re-initialized public repo.
+target/
+
+# Local environment and credential material.
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p8
+*.pub
+secrets/
+secrets.*
+credentials/
+credentials.*
+wrangler.toml
+
+# Orkia local runtime state, journals, and SEAL key/ledger material.
+.orkia/
+orkia-home/
+orkia-state/
+orkia-data/
+local-journal/
+local-journals/
+*.journal
+*.journal.jsonl
+*.seal.jsonl
+seal-keys/
+signing.pem
+
+# Local databases and generated state.
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite3-*
+*.log
+
+**/*.rs.bk
+*.swp
+*.swo
+*~
+.DS_Store
+.cargo/config.toml
+
+# Claude Code agent runtime state. `.claude/settings.json` is intentionally
+# tracked; everything else (ephemeral isolation worktrees, local agent state)
+# must never enter a re-initialized public repo.
+.claude/*
+!.claude/settings.json

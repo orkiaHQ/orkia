@@ -1,0 +1,18 @@
+[package]
+name = "orkia-rfc-mcp"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.85"
+license.workspace = true
+description = "JSON-RPC MCP tool server for the Orkia RFC primitive"
+
+[dependencies]
+orkia-rfc-core = { workspace = true }
+orkia-rfc-state = { workspace = true }
+orkia-shell-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

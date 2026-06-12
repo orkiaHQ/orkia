@@ -1,0 +1,7 @@
+[package]
+name = "orkia-seal"
+version = "0.1.0"
+edition = "2024"
+description = "Pointer crate to the SEAL family — see SPEC-SEAL-V1.md and SEAL-FAMILY.md"
+license = "Apache-2.0"
+publish = false

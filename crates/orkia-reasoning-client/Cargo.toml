@@ -1,0 +1,32 @@
+# Copyright 2026 Orkia
+# SPDX-License-Identifier: Elastic-2.0
+#
+# orkia-reasoning-client — HTTP client to the cloud reasoning routes.
+# Pushes dirty turns/signals via POST /v1/reasoning/sync (idempotent by
+# client_event_id) and pulls consolidated nodes/preferences. Bearer auth,
+# retry/back-off + status classification mirroring orkia-stream's transport.
+# The durable offline queue is the local SQLite store (dirty rows +
+# tail-preserving cap), not a second JSONL queue.
+[package]
+name = "orkia-reasoning-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+reqwest = { workspace = true }
+url = { workspace = true }
+orkia-reasoning-core = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+axum = "0.7"
+orkia-rfc-core = { workspace = true }

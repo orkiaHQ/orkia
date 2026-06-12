@@ -1,0 +1,20 @@
+[package]
+name = "orkia-forge-seal"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.85"
+license = "Elastic-2.0"
+description = "Orkia Forge V2: per-app SEAL chain (ECDSA P-256 + hash chaining + verifier)"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+sha2 = { workspace = true }
+p256 = { workspace = true }
+hex = { workspace = true }
+parking_lot = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

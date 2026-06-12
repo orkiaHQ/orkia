@@ -1,0 +1,10 @@
+# OPTIONAL local-dev override: redirect the pinned-rev brush deps from
+# `orkia/Cargo.toml` to a sibling `../brush/` checkout so edits there
+# are picked up without committing a new rev.
+#
+# To enable: copy this file to `.cargo/config.toml` (gitignored) and
+# ensure `../brush/` is a sibling working tree of this repo.
+[patch."https://github.com/orkiaHQ/brush"]
+brush-core     = { path = "../brush/brush-core" }
+brush-parser   = { path = "../brush/brush-parser" }
+brush-builtins = { path = "../brush/brush-builtins" }

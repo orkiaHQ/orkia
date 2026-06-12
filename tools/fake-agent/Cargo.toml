@@ -1,0 +1,17 @@
+[package]
+name = "orkia-fake-agent"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "Scripted TUI agent used by `orkia-test-harness` to exercise the shell with deterministic, real-PTY behaviour. Not a mock — a real TUI binary."
+
+[[bin]]
+name = "orkia-fake-agent"
+path = "src/main.rs"
+
+[dependencies]
+orkia-test-harness = { path = "../../crates/orkia-test-harness" }
+serde_yaml = "0.9"
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+libc = { workspace = true }

@@ -1,0 +1,18 @@
+# fixture. Detached from the main workspace (own `[workspace]` table) so
+# `cargo build --workspace` doesn't host-compile this wasm-only binary. Built to
+# `wasm32-wasip1` and the resulting `.wasm` is vendored into
+# `crates/orkia-plugin/tests/fixtures/where_big_rs.wasm` for the e2e test.
+[package]
+name = "where_big_rs"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+orkia-plugin-sdk = { path = "../orkia-plugin-sdk" }
+
+[profile.release]
+opt-level = "z"
+strip = true

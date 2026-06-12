@@ -1,0 +1,14 @@
+[package]
+name = "orkia-plugin-sdk-macros"
+version = "0.1.0"
+edition.workspace = true
+license = "Apache-2.0"
+description = "SPEC-ORKIA-PLUGIN-RUST-V1: the #[orkia::command] proc macro for Rust plugins"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full"] }

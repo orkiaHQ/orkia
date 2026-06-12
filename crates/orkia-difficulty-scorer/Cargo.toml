@@ -1,0 +1,9 @@
+[package]
+name = "orkia-difficulty-scorer"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.85"
+license.workspace = true
+description = "Standalone difficulty scoring for prompt complexity analysis"
+
+[dependencies]

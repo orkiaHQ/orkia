@@ -1,0 +1,78 @@
+[package]
+name = "orkia-shell"
+version = "0.1.0"
+edition.workspace = true
+license = "Elastic-2.0"
+description = "The agentic shell core — REPL, decision engine, traits"
+
+[dependencies]
+orkia-shell-types = { workspace = true }
+orkia-plugin = { workspace = true }
+orkia-final-response = { workspace = true }
+orkia-journal-hub = { workspace = true }
+orkia-builtin = { workspace = true }
+orkia-app-builtin = { workspace = true }
+orkia-auth = { workspace = true }
+orkia-magic-login = { workspace = true }
+orkia-stream = { workspace = true }
+orkia-capabilities = { workspace = true }
+orkia-kernel = { workspace = true }
+orkia-reasoning-core = { workspace = true }
+orkia-reasoning-store = { workspace = true }
+orkia-knowledge-mcp = { workspace = true }
+orkia-kernel-client = { workspace = true }
+orkia-kernel-installer = { workspace = true }
+orkia-forge-build = { workspace = true }
+async-trait = { workspace = true }
+orkia-rfc-core = { workspace = true }
+orkia-rfc-state = { workspace = true }
+orkia-rfc-mcp = { workspace = true }
+orkia-pty = { workspace = true }
+orkia-terminal-core = { workspace = true }
+alacritty_terminal = { workspace = true }
+parking_lot = { workspace = true }
+arc-swap = { workspace = true }
+tokio = { workspace = true }
+crossterm = { workspace = true }
+terminal_size = { workspace = true }
+libc = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+# Format-preserving TOML edits for the codex trust config (already in the
+# tree via `toml`); used by `trust::codex` to add a `trust_level` entry
+# without reflowing the user's `~/.codex/config.toml`.
+toml_edit = "0.25"
+# Atomic config writes (trust providers, registry) — temp file + rename.
+tempfile = "3"
+uuid = { workspace = true }
+chrono = { workspace = true }
+indexmap = { workspace = true }
+futures = { workspace = true }
+bytes = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+# Pinned directly (matches `orkia-stream`); not a workspace dependency.
+notify = "8"
+thiserror = { workspace = true }
+tracing = { workspace = true }
+brush-core = { workspace = true }
+brush-builtins = { workspace = true }
+rustyline = { version = "18", default-features = false, features = ["with-file-history", "custom-bindings"] }
+
+[features]
+default = []
+
+[dev-dependencies]
+# Used by `tests/common` to construct `SpawnDeps.job_projects` when driving the
+# production `JobController::spawn` path from integration tests (REF-006).
+parking_lot = { workspace = true }
+# `test-util` enables the paused virtual clock (`time::pause`/`advance`,
+# `#[tokio::test(start_paused = true)]`) used by the deterministic display-flush
+tokio = { workspace = true, features = ["test-util"] }
+# Pulls in the `MockTeamClient` used by scope_e2e_test.rs.
+orkia-shell-types = { workspace = true, features = ["test-utils"] }
+uuid = { workspace = true }
+# Cranelift only in the test build, to pre-compile a plugin `.wasm` → `.cwasm`
+# (the production binary stays wasmtime runtime-only). See tests/plugin_test.rs.
+wasmtime = { version = "44", default-features = false, features = ["runtime", "cranelift"] }

@@ -1,0 +1,15 @@
+[package]
+name = "orkia-pty"
+description = "PTY abstraction over portable-pty + alacritty_terminal."
+version = "0.1.0"
+edition.workspace = true
+license = "Elastic-2.0"
+publish = false
+
+[dependencies]
+alacritty_terminal = { workspace = true }
+portable-pty = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+libc = { workspace = true }

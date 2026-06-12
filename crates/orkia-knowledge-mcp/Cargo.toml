@@ -1,0 +1,26 @@
+# Copyright 2026 Orkia
+# SPDX-License-Identifier: Elastic-2.0
+#
+# orkia-knowledge-mcp — JSON-RPC MCP tool server for the premium Knowledge
+# transport (multiplexed on ~/.orkia/run/orkia.sock) and calls
+# `dispatch_request` per parsed frame. Read-only over the local reasoning
+# store; the one write is the access-accounting bump on served nodes.
+[package]
+name = "orkia-knowledge-mcp"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.85"
+license.workspace = true
+description = "JSON-RPC MCP tool server for the Orkia Knowledge Graph (premium)"
+
+[dependencies]
+orkia-reasoning-core = { workspace = true }
+orkia-reasoning-store = { workspace = true }
+orkia-shell-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+chrono = { workspace = true }
+orkia-rfc-core = { workspace = true }

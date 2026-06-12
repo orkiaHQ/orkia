@@ -1,0 +1,29 @@
+[package]
+name = "orkia-sh"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "Elastic-2.0"
+description = "Command-mediation shell shim for the Orkia cage (SPEC-CAGE-SPRINT-5/6)"
+
+[[bin]]
+name = "orkia-sh"
+path = "src/main.rs"
+
+[dependencies]
+# Only the Policy data type + verdict — the shim takes a concrete policy file and
+# evaluates each `-c` command against it. Kept dependency-light: this binary sits
+# on the agent's hot path (every shell-out re-execs it).
+orkia-shell-types = { workspace = true }
+toml = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+
+# Linux only: supervise an allowed command (fork+wait + signal forwarding) so we
+# observe its exit and emit `command.outcome`. macOS gets the outcome from the
+# PostToolUse hook instead, so it needs none of this.
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", features = ["signal", "process"] }
+
+[dev-dependencies]
+tempfile = "3"

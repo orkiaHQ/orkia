@@ -1,0 +1,25 @@
+# Copyright 2026 Orkia
+# SPDX-License-Identifier: Elastic-2.0
+#
+# orkia-reasoning-core — pure domain types for the Orkia reasoning graph.
+# No I/O. All closed graph domains (roles, links, node kinds, …) are enums,
+# not strings, with a single serde representation shared by the HTTP wire and
+# the SQLite/Postgres TEXT columns.
+[package]
+name = "orkia-reasoning-core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+dashmap = "6"
+orkia-rfc-core.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true
