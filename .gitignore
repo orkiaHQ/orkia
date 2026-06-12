@@ -44,8 +44,6 @@ signing.pem
 .DS_Store
 .cargo/config.toml
 
-# Claude Code agent runtime state. `.claude/settings.json` is intentionally
-# tracked; everything else (ephemeral isolation worktrees, local agent state)
-# must never enter a re-initialized public repo.
-.claude/*
-!.claude/settings.json
+# Claude Code agent runtime state (settings, ephemeral isolation worktrees,
+# local agent state) must never enter the repo.
+.claude/
