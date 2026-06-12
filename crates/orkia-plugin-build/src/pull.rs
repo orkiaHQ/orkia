@@ -118,10 +118,26 @@ fn download_and_verify(dir: &std::path::Path, bin: &std::path::Path) -> Result<(
         .map_err(|e| CompileError::Pull(format!("gunzip: {e}")))?;
 
     std::fs::create_dir_all(dir).map_err(|e| CompileError::Pull(e.to_string()))?;
-    std::fs::write(bin, &bytes).map_err(|e| CompileError::Pull(e.to_string()))?;
-    set_executable(bin)?;
+    // Install atomically: write+chmod a unique temp file, then rename it into
+    // place. Two callers racing on a cold cache (cargo runs the compile_e2e
+    // tests as concurrent threads; in production, two plugins compiling at
+    // once) must never exec `bin` while another is mid-write — that surfaces
+    // as ETXTBSY (Linux) or a truncated, unexecutable Mach-O (macOS). The temp
+    // name carries the pid and a process-wide counter so threads never collide.
+    let seq = TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let tmp = dir.join(format!("javy.{}.{seq}.tmp", std::process::id()));
+    std::fs::write(&tmp, &bytes).map_err(|e| CompileError::Pull(e.to_string()))?;
+    set_executable(&tmp)?;
+    std::fs::rename(&tmp, bin).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        CompileError::Pull(e.to_string())
+    })?;
     Ok(())
 }
+
+/// Process-wide counter making each in-flight temp install name unique across
+/// threads (cargo test runs tests as threads in one process, sharing the pid).
+static TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(unix)]
 fn set_executable(path: &std::path::Path) -> Result<(), CompileError> {
