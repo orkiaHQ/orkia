@@ -22,11 +22,14 @@ use std::process::{Command, Stdio};
 
 use orkia_shell::ShellConfig;
 
-/// Release signing public key, compiled in from the repo-root canonical
-/// file `release-pubkey.pub`. release.yml fail-closes the publish job if
-/// the ORKIA_RELEASE_SSH_SK secret's public half drifts from that file;
-/// only install.sh (landing repo) still embeds its own copy, by design —
-/// it is the TLS-delivered trust root and must stay self-contained.
+/// Release signing public key, compiled in from the workspace-root
+/// canonical file `release-pubkey.pub`. The path is relative to the cargo
+/// workspace root so it resolves identically whether the workspace sits
+/// under `orkia/` in the monorepo or at the root of the published
+/// `orkiaHQ/orkia` repo. release.yml fail-closes the publish job if the
+/// ORKIA_RELEASE_SSH_SK secret's public half drifts from that file; only
+/// install.sh (landing repo) still embeds its own copy, by design — it is
+/// the TLS-delivered trust root and must stay self-contained.
 const PUBKEY_SSH: &str = include_str!("../../../release-pubkey.pub");
 
 /// Commit this binary was built from. Stamped by release.yml via the
