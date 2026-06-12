@@ -27,7 +27,7 @@ use orkia_shell::ShellConfig;
 /// the ORKIA_RELEASE_SSH_SK secret's public half drifts from that file;
 /// only install.sh (landing repo) still embeds its own copy, by design —
 /// it is the TLS-delivered trust root and must stay self-contained.
-const PUBKEY_SSH: &str = include_str!("../../../../release-pubkey.pub");
+const PUBKEY_SSH: &str = include_str!("../../../release-pubkey.pub");
 
 /// Commit this binary was built from. Stamped by release.yml via the
 /// ORKIA_BUILD_COMMIT env at compile time; `None` for local builds.
