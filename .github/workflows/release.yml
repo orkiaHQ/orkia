@@ -113,8 +113,16 @@ jobs:
           out="target/${{ matrix.target }}/release"
           tar -czf "orkia-${{ matrix.platform }}.tar.gz" \
             -C "$out" orkia orkia-cage orkia-sh
-          sha256sum "orkia-${{ matrix.platform }}.tar.gz" > \
-            "orkia-${{ matrix.platform }}.sha256"
+          # macOS runners ship `shasum`, not GNU `sha256sum`. Pick
+          # whichever exists so Package works on every matrix OS (both
+          # emit the same "<hash>  <file>" format).
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "orkia-${{ matrix.platform }}.tar.gz" \
+              > "orkia-${{ matrix.platform }}.sha256"
+          else
+            shasum -a 256 "orkia-${{ matrix.platform }}.tar.gz" \
+              > "orkia-${{ matrix.platform }}.sha256"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.platform }}
