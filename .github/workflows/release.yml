@@ -1,0 +1,184 @@
+# Cross-compiles the orkia shell on every merge to main, signs the
+# release manifest with the release Ed25519 key (SSHSIG format, via
+# ssh-keygen), and publishes a ROLLING `latest` release on this repo
+# (orkiaHQ/orkia) — consumed by orkia.dev/install.
+#
+# Layout note: in this PUBLIC repo the cargo workspace lives at the
+# repo ROOT (Cargo.toml at root), unlike the monorepo where it sits
+# under orkia/. So there is no `working-directory: orkia` — every
+# cargo/cross step runs at the checkout root.
+#
+# Trigger model: rolling `latest`. Every push to main overwrites the
+# `latest` tag and its release. For pinned versions, cut a `v*` tag
+# manually — this workflow republishes `latest` only, so manual tags
+# stay untouched and install.sh users can request them via
+# ORKIA_VERSION=v1.2.3.
+#
+# Required secret:
+#   ORKIA_RELEASE_SSH_SK  — OpenSSH-format Ed25519 private key,
+#                            full file contents (multi-line, base64
+#                            inside BEGIN/END OPENSSH PRIVATE KEY).
+#
+# Public key (rotation checklist):
+#   The canonical copy is `release-pubkey.pub` at the repo root —
+#   compiled into `orkia update` via include_str!. The publish job
+#   below fail-closes if the secret's public half drifts from that
+#   file. On rotation: update `release-pubkey.pub`, rotate the
+#   secret, and update PUBKEY_SSH in install.sh (landing repo —
+#   self-contained by design, it is the TLS-delivered trust root).
+#
+# No PAT needed: GITHUB_TOKEN with contents:write publishes to this
+# same repo.
+name: release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-latest
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: darwin-arm64
+            target: aarch64-apple-darwin
+            os: macos-14
+          - platform: darwin-x86_64
+            target: x86_64-apple-darwin
+            os: macos-14
+          - platform: linux-x86_64
+            target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+          - platform: linux-arm64
+            target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install musl tooling
+        if: contains(matrix.target, 'musl')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          cargo install cross --locked || true
+      - name: Export kernel trust anchor
+        # The kernel-signing public key compiled into the shell
+        # (orkia-kernel-trust). Canonical copy: kernel-pubkey.hex at the
+        # repo root — release builds FAIL to compile without it (SEC-003).
+        # Rotation: update kernel-pubkey.hex + the server's signing-seed
+        # secret together, then push to main.
+        run: |
+          echo "ORKIA_KERNEL_PUBKEY_HEX=$(tr -d '[:space:]' < kernel-pubkey.hex)" \
+            >> "$GITHUB_ENV"
+      - name: Build
+        env:
+          # Stamped into the binary via option_env! so `orkia update
+          # --check` can compare against the manifest's `commit` field.
+          # (Both env vars reach the cross container via Cross.toml
+          # [build.env] passthrough.)
+          ORKIA_BUILD_COMMIT: ${{ github.sha }}
+        run: |
+          # The shell's package is `orkia-cli` (it produces the `orkia`
+          # binary); `orkia-cage` / `orkia-sh` are package == binary.
+          if [ "${{ matrix.os }}" = "ubuntu-24.04" ]; then
+            cross build --release --target ${{ matrix.target }} \
+              -p orkia-cli -p orkia-cage -p orkia-sh
+          else
+            cargo build --release --target ${{ matrix.target }} \
+              -p orkia-cli -p orkia-cage -p orkia-sh
+          fi
+      - name: Package
+        run: |
+          out="target/${{ matrix.target }}/release"
+          tar -czf "orkia-${{ matrix.platform }}.tar.gz" \
+            -C "$out" orkia orkia-cage orkia-sh
+          sha256sum "orkia-${{ matrix.platform }}.tar.gz" > \
+            "orkia-${{ matrix.platform }}.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            orkia-${{ matrix.platform }}.tar.gz
+            orkia-${{ matrix.platform }}.sha256
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dist }
+      - name: Build signed manifest (SSHSIG)
+        env:
+          SK: ${{ secrets.ORKIA_RELEASE_SSH_SK }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -eu
+          mkdir -p release && find dist -type f -exec mv {} release/ \;
+          cd release
+          # manifest.json: { version, commit, platforms: {<plat>: {sha256,size}} }
+          {
+            printf '{"version":"latest","commit":"%s","platforms":{' "$SHA"
+            first=1
+            for p in darwin-arm64 darwin-x86_64 linux-x86_64 linux-arm64; do
+              f="orkia-$p.tar.gz"; [ -f "$f" ] || continue
+              sha=$(sha256sum "$f" | cut -d' ' -f1)
+              sz=$(wc -c < "$f" | tr -d ' ')
+              [ $first -eq 1 ] || printf ','
+              printf '"%s":{"sha256":"%s","size":%s}' "$p" "$sha" "$sz"
+              first=0
+            done
+            printf '}}'
+          } > manifest.json
+          # Sign with ssh-keygen -Y (SSHSIG). The secret is the full
+          # OpenSSH private key file; write it out, chmod 600, sign.
+          umask 077
+          printf '%s\n' "$SK" > sk
+          # Guard: the secret's public half must match the canonical
+          # release-pubkey.pub committed at the repo root (compiled
+          # into `orkia update`). Fail-closed on drift — a release
+          # signed by a rotated key that the binaries can't verify
+          # would brick the update path.
+          derived=$(ssh-keygen -y -f sk | awk '{print $1" "$2}')
+          canonical=$(awk '{print $1" "$2}' "$GITHUB_WORKSPACE/release-pubkey.pub")
+          if [ "$derived" != "$canonical" ]; then
+            echo "::error::ORKIA_RELEASE_SSH_SK does not match release-pubkey.pub — rotate both together"
+            rm -f sk
+            exit 1
+          fi
+          ssh-keygen -Y sign -f sk -n file manifest.json
+          # produces manifest.json.sig in PEM-style SSHSIG envelope
+          rm -f sk
+      - name: Refresh rolling `latest` release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          cd release
+          # Delete prior `latest` release + tag if they exist, then
+          # recreate from this commit. `gh release delete` does NOT
+          # remove the tag, so do both.
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          # Glob the assets so a continue-on-error matrix entry that
+          # didn't produce artifacts doesn't break the upload. The
+          # manifest already lists only platforms whose tarball exists,
+          # so the release stays internally consistent.
+          gh release create latest \
+            --title "latest" \
+            --notes "Rolling release from ${GITHUB_SHA::7} on $(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --target "$GITHUB_SHA" \
+            --latest \
+            orkia-*.tar.gz orkia-*.sha256 \
+            manifest.json manifest.json.sig
