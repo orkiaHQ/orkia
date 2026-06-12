@@ -1,0 +1,90 @@
+# cargo-deny configuration for the Orkia workspace.
+#
+# Run `cargo deny check` locally and in CI. The intent is:
+#   * no security advisories on the dependency tree (except those
+#     explicitly justified below)
+#   * every transitive license is on the explicit allow list
+#   * every git source is whitelisted
+#
+# Each accepted advisory has a justification — never add to `ignore`
+# without a one-sentence reason.
+
+[graph]
+all-features = false
+no-default-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # ── GTK3 chain unmaintained (Tauri / forge-viewer only) ──────
+    # The entire gtk-rs GTK3 binding family is unmaintained. They
+    # are pulled in by `tauri` via `orkia-forge-viewer-bin` (the
+    # desktop preview), not by the core shell binary. Track the
+    # move to gtk4-rs in a follow-up.
+    { id = "RUSTSEC-2024-0411", reason = "gdkwayland-sys: gtk-rs GTK3 unmaintained; forge-viewer only." },
+    { id = "RUSTSEC-2024-0412", reason = "gdk: gtk-rs GTK3 unmaintained; forge-viewer only." },
+    { id = "RUSTSEC-2024-0413", reason = "atk: gtk-rs GTK3 unmaintained; forge-viewer only." },
+    { id = "RUSTSEC-2024-0414", reason = "gdkx11-sys: gtk-rs GTK3 unmaintained; forge-viewer only." },
+    { id = "RUSTSEC-2024-0415", reason = "gtk: gtk-rs GTK3 unmaintained; forge-viewer only." },
+    { id = "RUSTSEC-2024-0416", reason = "atk-sys: gtk-rs GTK3 unmaintained; forge-viewer only." },
+    { id = "RUSTSEC-2024-0417", reason = "gdkx11: gtk-rs GTK3 unmaintained; forge-viewer only." },
+    { id = "RUSTSEC-2024-0418", reason = "gdk-sys: gtk-rs GTK3 unmaintained; forge-viewer only." },
+    { id = "RUSTSEC-2024-0419", reason = "gtk3-macros: gtk-rs GTK3 unmaintained; forge-viewer only." },
+    { id = "RUSTSEC-2024-0420", reason = "gtk-sys: gtk-rs GTK3 unmaintained; forge-viewer only." },
+
+    # ── Unicode (unic-*) family unmaintained ─────────────────────
+    # All `unic-*` crates from https://github.com/open-i18n/rust-unic
+    # are unmaintained. Reached only through `tauri-utils` →
+    # `urlpattern` → `unic-ucd-*` on the forge-viewer binary.
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range unmaintained; tauri/forge-viewer only." },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common unmaintained; tauri/forge-viewer only." },
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property unmaintained; tauri/forge-viewer only." },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version unmaintained; tauri/forge-viewer only." },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident unmaintained; tauri/forge-viewer only." },
+
+    # ── proc-macro chain ────────────────────────────────────────
+    # `paste` and `proc-macro-error` are unmaintained but pulled in
+    # by macro crates at build time only — no runtime exposure.
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained; build-time only, no runtime exposure." },
+    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; build-time macro only, no runtime exposure." },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.93
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "Elastic-2.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",   # community data license; permissive equivalent
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "OpenSSL",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "WTFPL",                 # permissive, OSI-acknowledged; used by a few transitive deps
+    "Zlib",
+]
+exceptions = []
+
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+highlight = "all"
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/orkiaHQ/brush",
+    "https://github.com/zed-industries/alacritty",
+]

@@ -1,0 +1,12 @@
+[package]
+name = "orkia-kernel-trust"
+version = "0.1.0"
+edition.workspace = true
+license = "Elastic-2.0"
+description = "Ed25519 trust anchor for orkia-kernel downloads (OSS)"
+
+[dependencies]
+ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
+hex = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }

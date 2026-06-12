@@ -1,0 +1,12 @@
+[package]
+name = "orkia-forge-permissions"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.85"
+license = "Elastic-2.0"
+description = "Orkia Forge V2: per-app permission model + strict domain matcher"
+
+[dependencies]
+orkia-forge-types = { workspace = true }
+url = { workspace = true }
+serde = { workspace = true }

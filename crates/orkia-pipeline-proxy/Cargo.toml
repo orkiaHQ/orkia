@@ -1,0 +1,16 @@
+[package]
+name = "orkia-pipeline-proxy"
+version = "0.1.0"
+edition.workspace = true
+license = "Elastic-2.0"
+description = "OSS agent-pipeline coordinator: drives @a|@b by asking orkia-kernel to authorize/advance while running each stage over a real PTY"
+
+[dependencies]
+orkia-shell-types = { workspace = true }
+orkia-stage-exec = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+orkia-shell = { workspace = true }
+tempfile = "3"

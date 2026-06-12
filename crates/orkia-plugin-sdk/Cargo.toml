@@ -1,0 +1,13 @@
+[package]
+name = "orkia-plugin-sdk"
+version = "0.1.0"
+edition.workspace = true
+license = "Apache-2.0"
+description = "SPEC-ORKIA-PLUGIN-RUST-V1: Rust plugin SDK — Value, Args, #[orkia::command] — compiles to wasm32-wasip1"
+
+[dependencies]
+# The shared, wasm-buildable Value + §3.2 bridge (same type/format as the host).
+orkia-value = { workspace = true }
+orkia-plugin-sdk-macros = { workspace = true }
+serde_json = { workspace = true }
+indexmap = { workspace = true }

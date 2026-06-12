@@ -1,0 +1,40 @@
+[package]
+name = "orkia-plugin"
+version = "0.1.0"
+edition.workspace = true
+license = "Elastic-2.0"
+description = "SPEC-ORKIA-PLUGIN-TS-V1: sandboxed WASM plugin runtime + Value↔JS bridge"
+
+[dependencies]
+orkia-shell-types = { workspace = true }
+# The §3.2 boundary bridge (`value_to_json`/`json_to_value`) now lives in the
+# shared wasm-buildable crate; re-exported from `crate::bridge`.
+orkia-value = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+chrono = { workspace = true }
+toml = { workspace = true }
+indexmap = { workspace = true }
+thiserror = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+async-trait = { workspace = true }
+tracing = { workspace = true }
+tokio = { workspace = true }
+# Lazy pull-based streaming across the WASM frontier (RUNTIME-V2 §1, P1):
+# chunked `ListStream` so a downstream `first N` stops the plugin early.
+futures = { workspace = true }
+# Runtime-only wasmtime (no Cranelift) — the default, lightweight build.
+wasmtime = { workspace = true }
+# WASI preview1 (stdio only) to run QuickJS-WASM engine modules (Javy, §1.2).
+# Sandboxed: input on stdin, output on stdout, no preopens / env / network.
+wasmtime-wasi = "44"
+
+[dev-dependencies]
+# Tests need a compiler (Cranelift) + WAT parsing to build guest modules and
+# precompiled `.cwasm` blobs in-process. This only affects `cargo test -p
+# orkia-plugin`; the normal dependency edge (and the orkia binary) stays
+# runtime-only.
+wasmtime = { version = "44", default-features = false, features = ["runtime", "cranelift", "wat"] }
+tokio = { workspace = true }

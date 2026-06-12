@@ -1,0 +1,202 @@
+[workspace]
+resolver = "2"
+
+members = [
+    # ── Shell core ──────────────────────────────────────────
+    "crates/orkia-value",             # SPEC-ORKIA-PLUGIN-RUST-V1: wasm-buildable Value/Type/bridge (shared host+SDK)
+    "crates/orkia-shell-types",       # shared types + trait definitions
+    "crates/orkia-shell",             # REPL, classifier impl, router impl, SEAL emitter
+    "crates/orkia-plugin",            # SPEC-ORKIA-PLUGIN-TS-V1: WASM plugin runtime + Value↔JS bridge
+    "crates/orkia-plugin-build",      # SPEC-ORKIA-PLUGIN-TS-V1 §6: TS→JS→QuickJS-WASM compiler (separate artifact)
+    "crates/orkia-plugin-sdk",        # SPEC-ORKIA-PLUGIN-RUST-V1: Rust plugin SDK (wasm32-wasip1)
+    "crates/orkia-plugin-sdk-macros", # SPEC-ORKIA-PLUGIN-RUST-V1: #[orkia::command] proc macro
+    "crates/orkia-final-response",    # captures agent final responses from provider transcripts
+    "crates/orkia-journal-hub",       # process-agnostic journal hub: orkia.sock listener + bus + disk subscribers
+    "crates/orkia-stage-exec",        # generic interactive PTY stage executor (single-shell pipeline)
+    "crates/orkia-mcp-pipe-server",   # MCP stdio server (submit_pipeline_output) — `orkia mcp-pipe` safety net
+    "crates/orkia-pipeline-proxy",    # OSS @a|@b coordinator: kernel authorize/advance + PTY stage exec
+    "crates/orkia-forge-proxy",       # OSS ForgeBuilder: kernel-relayed Forge build + local materialize
+    "crates/orkia-seal-proxy",        # OSS RfcSealAssembler: kernel-relayed SEAL v1 assembly
+    "crates/orkia-builtin",           # builtins: ps, seal, route, attach, approve, etc.
+
+    # ── Shared libraries ────────────────────────────────────
+    "crates/orkia-entities-core",     # entity types: Agent, Issue, Seal, etc.
+    "crates/orkia-rfc-core",          # RFC primitive: state machine, frontmatter, persistence
+    "crates/orkia-rfc-lock",          # RFC single-writer lock (timeout, channel-owned)
+    "crates/orkia-rfc-state",         # RFC service façade composing core + lock + SEAL emission
+    "crates/orkia-rfc-mcp",           # RFC MCP JSON-RPC tool server (multiplexed on orkia.sock)
+    "crates/orkia-difficulty-scorer", # intent difficulty scoring
+    "crates/orkia-reasoning-core",    # reasoning graph: pure domain types (enums, DTOs, render)
+    "crates/orkia-reasoning-store",   # reasoning graph: local SQLite store (mirrors cloud schema)
+    "crates/orkia-reasoning-client",  # reasoning graph: HTTP client to cloud /v1/reasoning/* routes
+    "crates/orkia-knowledge-mcp",     # knowledge graph: MCP JSON-RPC tool server (premium, on orkia.sock)
+    "crates/orkia-kernel",            # Orkia Intelligence gate: login+premium gate, models, reasoning
+    "crates/orkia-model-catalog",     # LLM model reference catalog
+    "crates/orkia-forge-types",       # Forge: shared manifest + bridge types
+    "crates/orkia-app-builtin",       # Forge: `orkia app *` builtin
+    "crates/orkia-forge-viewer",      # Forge: viewer lib (storage, bridge, journal)
+    "bins/orkia-forge-viewer",        # Forge: viewer binary
+    "crates/orkia-auth",              # Forge V1: auth client (keyring + OAuth flow)
+    "crates/orkia-magic-login",       # J2.6: magic-link AuthProvider (email code -> bearer -> keychain)
+    "crates/orkia-capabilities",      # SPRINT-A: plan -> capability resolution
+    "crates/orkia-kernel-client",     # SPRINT-A: IPC client for orkia-kernel daemon
+    "crates/orkia-kernel-trust",      # SPRINT-B: embedded Ed25519 pubkey + signature verify
+    "crates/orkia-kernel-installer",  # SPRINT-B: download + verify + install + register daemon
+    "crates/orkia-forge-build",       # Forge V1: local build mechanics (FS, hash, manifest)
+    "crates/orkia-forge-permissions", # Forge V2: per-app permission model
+    "crates/orkia-forge-seal",        # Forge V2: per-app SEAL chain (ECDSA + hashes)
+    "crates/orkia-seal",              # Pointer crate to the SEAL family (see SPEC-SEAL-V1.md)
+
+    # ── Binaries ────────────────────────────────────────────
+    "bins/orkia",                     # the shell binary
+    "bins/orkia-cage",                # SPEC-CAGE: execution-boundary agent launcher
+    "bins/orkia-sh",                  # SPEC-CAGE-SPRINT-5/6: command-mediation shell shim + verdict tap
+
+    # ── PTY / Terminal engine ──────────────────────────────────
+    "crates/orkia-pty",              # PTY abstraction (portable-pty + alacritty)
+    "crates/orkia-terminal-core",    # 3-thread terminal engine (reader/extractor/render)
+
+    "crates/orkia-shell-tui",
+    "crates/orkia-stream",
+
+    # ── E2E test harness ───────────────────────────────────────
+    "crates/orkia-test-harness",     # hermetic sandbox + PTY driver + journal tail
+    "crates/orkia-e2e-harness",      # S0 full-stack harness (OrkiaSession + asserts)
+    "bins/orkia-check",              # S0 full-stack gate binary
+    "tools/fake-agent",              # scripted TUI agent used by the harness (not a mock)
+
+    # Not yet ported — uncomment when migrated from backup:
+    # "crates/orkia-gpui-selectable",
+]
+
+# `orkia-seal-assembler` is not part of this public workspace. Integrators
+# can provide an implementation via the public
+# `orkia_shell_types::RfcSealAssembler` trait. Keeping it out is what makes
+# this workspace self-contained.
+
+[workspace.package]
+edition = "2024"
+# Public-launch MSRV is 1.92, not 1.91: wasmtime 44 carries required
+# security fixes and declares rustc >= 1.92. Keep this in sync with
+# rust-toolchain.toml and README.md.
+rust-version = "1.92"
+license = "Elastic-2.0"
+
+[workspace.dependencies]
+# ── Async ───────────────────────────────────────────────────
+tokio = { version = "1", features = ["full"] }
+async-trait = "0.1"
+
+# ── HTTP / OAuth (Forge V1) ─────────────────────────────────
+reqwest = { version = "0.13", features = ["json", "rustls", "stream", "cookies"], default-features = false }
+keyring = "4"
+webbrowser = "1"
+url = "2"
+
+# ── Crypto (Forge V2 per-app SEAL: ECDSA P-256 + PEM) ───────
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+rand = "0.9"
+hex = "0.4"
+
+# ── Serialization ───────────────────────────────────────────
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "1"
+indexmap = { version = "2", features = ["serde"] }
+
+futures = "0.3"
+bytes = "1"
+
+base64 = "0.22"
+# wasmtime runtime-only (no Cranelift) — §1.3. The orkia-plugin crate adds
+# cranelift+wat as a dev-dependency so its tests can compile WAT guests.
+wasmtime = { version = "44", default-features = false, features = ["runtime"] }
+# Plugin compiler (§6, separate artifact — NOT in the default binary):
+# OXC for TS→JS (MSRV 1.90), ureq for the Javy compiler pull.
+oxc = { version = "0.110", features = ["semantic", "transformer", "codegen"] }
+ureq = "3"
+
+# ── Error handling ──────────────────────────────────────────
+thiserror = "2"
+anyhow = "1"
+
+# ── Crypto (SEAL) ──────────────────────────────────────────
+sha2 = "0.11"
+
+# ── UUID / Time ─────────────────────────────────────────────
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# ── Cron (`orkia every` schedule validator + next-run) ─────
+cron = "0.16"
+
+# ── Logging ─────────────────────────────────────────────────
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# ── Terminal / PTY ──────────────────────────────────────────
+alacritty_terminal = { git = "https://github.com/zed-industries/alacritty", rev = "9d9640d4" }
+portable-pty = "0.9"
+parking_lot = "0.12"
+arc-swap = "1"
+async-channel = "2"
+crossterm = "0.29"
+ratatui = "0.30"
+terminal_size = "0.4"
+libc = "0.2"
+
+# ── Filesystem watch (orkia-stream SealChain tailing) ──────
+notify = "8"
+
+# ── Shell engine (brush — forked to orkiaHQ/brush) ─────────
+# Pinned to a specific commit. Bumping the rev is a deliberate act —
+# brush-core is pre-1.0 and its public API can shift between revisions.
+# For local development, `.cargo/config.toml` patches these to the
+# sibling `../brush/` checkout so edits there are picked up live.
+brush-core     = { git = "https://github.com/orkiaHQ/brush", rev = "5a50c12ed59e610dae038db9acf642286c585e2d" }
+brush-parser   = { git = "https://github.com/orkiaHQ/brush", rev = "5a50c12ed59e610dae038db9acf642286c585e2d" }
+brush-builtins = { git = "https://github.com/orkiaHQ/brush", rev = "5a50c12ed59e610dae038db9acf642286c585e2d" }
+
+# ── Internal crates ─────────────────────────────────────────
+orkia-value = { path = "crates/orkia-value" }
+orkia-shell-types = { path = "crates/orkia-shell-types" }
+orkia-shell = { path = "crates/orkia-shell" }
+orkia-plugin = { path = "crates/orkia-plugin" }
+orkia-plugin-sdk = { path = "crates/orkia-plugin-sdk" }
+orkia-plugin-sdk-macros = { path = "crates/orkia-plugin-sdk-macros" }
+orkia-final-response = { path = "crates/orkia-final-response" }
+orkia-journal-hub = { path = "crates/orkia-journal-hub" }
+orkia-stage-exec = { path = "crates/orkia-stage-exec" }
+orkia-mcp-pipe-server = { path = "crates/orkia-mcp-pipe-server" }
+orkia-pipeline-proxy = { path = "crates/orkia-pipeline-proxy" }
+orkia-forge-proxy = { path = "crates/orkia-forge-proxy" }
+orkia-seal-proxy = { path = "crates/orkia-seal-proxy" }
+orkia-builtin = { path = "crates/orkia-builtin" }
+orkia-entities-core = { path = "crates/orkia-entities-core" }
+orkia-rfc-core = { path = "crates/orkia-rfc-core" }
+orkia-rfc-lock = { path = "crates/orkia-rfc-lock" }
+orkia-rfc-state = { path = "crates/orkia-rfc-state" }
+orkia-rfc-mcp = { path = "crates/orkia-rfc-mcp" }
+orkia-difficulty-scorer = { path = "crates/orkia-difficulty-scorer" }
+orkia-reasoning-core = { path = "crates/orkia-reasoning-core" }
+orkia-reasoning-store = { path = "crates/orkia-reasoning-store" }
+orkia-knowledge-mcp = { path = "crates/orkia-knowledge-mcp" }
+orkia-reasoning-client = { path = "crates/orkia-reasoning-client" }
+orkia-kernel = { path = "crates/orkia-kernel" }
+orkia-model-catalog = { path = "crates/orkia-model-catalog" }
+orkia-forge-types = { path = "crates/orkia-forge-types" }
+orkia-app-builtin = { path = "crates/orkia-app-builtin" }
+orkia-forge-viewer = { path = "crates/orkia-forge-viewer" }
+orkia-auth = { path = "crates/orkia-auth" }
+orkia-magic-login = { path = "crates/orkia-magic-login" }
+orkia-capabilities = { path = "crates/orkia-capabilities" }
+orkia-kernel-client = { path = "crates/orkia-kernel-client" }
+orkia-kernel-trust = { path = "crates/orkia-kernel-trust" }
+orkia-kernel-installer = { path = "crates/orkia-kernel-installer" }
+orkia-forge-build = { path = "crates/orkia-forge-build" }
+orkia-forge-permissions = { path = "crates/orkia-forge-permissions" }
+orkia-forge-seal = { path = "crates/orkia-forge-seal" }
+orkia-pty = { path = "crates/orkia-pty" }
+orkia-terminal-core = { path = "crates/orkia-terminal-core" }
+orkia-shell-tui = { path = "crates/orkia-shell-tui" }
+orkia-stream = { path = "crates/orkia-stream" }

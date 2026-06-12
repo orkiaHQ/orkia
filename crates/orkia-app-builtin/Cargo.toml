@@ -1,0 +1,22 @@
+[package]
+name = "orkia-app-builtin"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.85"
+license.workspace = true
+description = "`orkia app *` builtins: list, run, edit, remove, inspect"
+
+[dependencies]
+orkia-shell-types = { workspace = true }
+orkia-forge-types = { workspace = true }
+orkia-forge-seal = { workspace = true }
+orkia-rfc-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,29 @@
+[package]
+name = "orkia-e2e-harness"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+# Reuse the W1 sandbox / PTY / journal-tail primitives.
+orkia-test-harness = { path = "../orkia-test-harness" }
+# Forge App Provenance chain — for seed_forge_seal_chain (F504 fixture).
+orkia-forge-seal = { workspace = true }
+# Real login against the compose backend → file-backed session store.
+orkia-auth = { workspace = true }
+orkia-magic-login = { workspace = true }
+
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+reqwest = { workspace = true }
+chrono = { workspace = true }
+async-trait = { workspace = true }
+sqlx = { version = "0.8", default-features = false, features = [
+    "postgres",
+    "runtime-tokio-rustls",
+    "macros",
+] }

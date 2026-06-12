@@ -1,0 +1,267 @@
+#!/usr/bin/env python3
+"""
+rfc-lint — validate Orkia public-repo RFC files.
+
+Usage: rfc-lint <file.md> [<file.md> ...]
+
+Exits 0 if every file passes, 1 if any file fails.
+Errors are printed to stderr, one per line, in the form:
+  <path>[:<line>]: <message>
+    fix: <one-sentence suggestion>
+
+The 11 canonical checks live in CHECKS below. Scope creep on the linter
+is how linters become hated — keep the checks the prompt enumerates and
+nothing more.
+"""
+
+from __future__ import annotations
+
+import datetime as _dt
+import re
+import sys
+import tomllib
+from pathlib import Path
+
+# Order matters: this is the canonical body-section order. Reviewers read
+# top-to-bottom; diffs stay legible only if everyone uses the same order.
+REQUIRED_SECTIONS: tuple[str, ...] = (
+    "Context",
+    "Goals",
+    "Constraints",
+    "Approach",
+    "Tasks",
+    "Acceptance Criteria",
+    "Alternatives Considered",
+    "Open Questions",
+)
+
+VALID_STATES: frozenset[str] = frozenset({"draft", "active", "completed", "abandoned"})
+
+REQUIRED_FRONTMATTER: tuple[str, ...] = ("id", "title", "state", "created_at", "authors")
+
+# Fields the Orkia daemon manages. They MUST NOT appear in public-repo RFCs:
+# their presence is a sign of a bad copy-paste from an internal workspace.
+FORBIDDEN_FRONTMATTER: tuple[str, ...] = (
+    "content_hash",
+    "version",
+    "updated_at",
+    "locked_by",
+    "locked_at",
+    "agents",
+)
+
+ID_PATTERN = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+SECTION_PATTERN = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
+CHECKLIST_PATTERN = re.compile(r"^\s*-\s*\[[ xX]\]\s+\S", re.MULTILINE)
+# TEMPLATE.md is the canonical starting point and cannot satisfy the
+# id-matches-filename check (id is lowercase kebab-case; the filename is
+# uppercase). It is the only file whitelisted from that single check.
+TEMPLATE_FILENAME = "TEMPLATE.md"
+
+Errors = list[tuple[Path, int | None, str, str]]
+
+
+def lint_file(path: Path) -> Errors:
+    errors: Errors = []
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append((path, None, f"cannot read file: {exc}", "check the path and permissions"))
+        return errors
+
+    lines = text.splitlines()
+
+    # Check 1: opens with `+++` on line 1, closes within first 80 lines.
+    if not lines or lines[0].rstrip() != "+++":
+        errors.append((
+            path, 1, "missing opening '+++' delimiter on line 1",
+            "copy rfcs/TEMPLATE.md and fill it in, don't write from scratch",
+        ))
+        return errors  # nothing else makes sense without frontmatter
+
+    close_idx: int | None = None
+    for i, line in enumerate(lines[1:81], start=2):  # 1-based line number
+        if line.rstrip() == "+++":
+            close_idx = i
+            break
+    if close_idx is None:
+        errors.append((
+            path, None, "missing closing '+++' delimiter within first 80 lines",
+            "close the TOML frontmatter with a line containing only '+++'",
+        ))
+        return errors
+
+    # Check 2: frontmatter parses as TOML.
+    toml_body = "\n".join(lines[1:close_idx - 1])
+    try:
+        meta = tomllib.loads(toml_body)
+    except tomllib.TOMLDecodeError as exc:
+        errors.append((path, None, f"frontmatter is not valid TOML: {exc}",
+                       "fix the TOML syntax; mind unquoted strings and stray brackets"))
+        return errors
+
+    # Check 3: required frontmatter fields present.
+    for field in REQUIRED_FRONTMATTER:
+        if field not in meta:
+            errors.append((path, None, f"missing required frontmatter field '{field}'",
+                           f"add `{field} = ...` between the '+++' delimiters"))
+    if "authors" in meta:
+        authors = meta["authors"]
+        if not isinstance(authors, list) or not authors:
+            errors.append((path, None, "'authors' must be a non-empty array",
+                           'set authors = ["@your-github-handle"]'))
+
+    # Check 4: id matches filename minus .md (TEMPLATE.md is exempt — see top).
+    if path.name != TEMPLATE_FILENAME and "id" in meta:
+        expected_id = path.stem
+        if meta["id"] != expected_id:
+            errors.append((path, None,
+                           f"id '{meta['id']}' does not match filename stem '{expected_id}'",
+                           f"set id = \"{expected_id}\" or rename the file to {meta['id']}.md"))
+
+    # Check 5: id is kebab-case.
+    if "id" in meta:
+        rfc_id = meta["id"]
+        if not isinstance(rfc_id, str) or not ID_PATTERN.fullmatch(rfc_id):
+            errors.append((path, None,
+                           f"id '{rfc_id}' is not kebab-case (^[a-z][a-z0-9-]{{0,63}}$)",
+                           "use lowercase letters, digits, and hyphens; start with a letter"))
+
+    # Check 6: state is one of the allowed contributor-facing values.
+    if "state" in meta:
+        state = meta["state"]
+        if state not in VALID_STATES:
+            errors.append((path, None,
+                           f"state '{state}' is not one of {sorted(VALID_STATES)}",
+                           'use "draft" for new RFCs; "completed" for shipped ones'))
+
+    # Check 7: created_at is a valid ISO 8601 / RFC 3339 date or datetime.
+    if "created_at" in meta and not _is_valid_iso_date(meta["created_at"]):
+        errors.append((path, None,
+                       f"created_at '{meta['created_at']!r}' is not a valid ISO 8601 date/datetime",
+                       'use "YYYY-MM-DD" or a full RFC 3339 timestamp'))
+
+    # Check 11: no daemon-managed fields. Done before body checks so a
+    # contributor who pasted an internal RFC gets the clearest signal first.
+    for field in FORBIDDEN_FRONTMATTER:
+        if field in meta:
+            errors.append((path, None,
+                           f"daemon-managed field '{field}' is not allowed in public-repo RFCs",
+                           f"delete '{field}' — it is computed inside the Orkia daemon"))
+
+    # Body checks: sections 8, 9, 10.
+    body = "\n".join(lines[close_idx:])
+    section_positions = _find_sections(body, lines_offset=close_idx)
+
+    # Check 8: required sections present, in the canonical order.
+    found_order = [name for name, _ in section_positions if name in REQUIRED_SECTIONS]
+    expected_order = list(REQUIRED_SECTIONS)
+    missing = [s for s in REQUIRED_SECTIONS if s not in found_order]
+    for section in missing:
+        errors.append((path, None, f"missing required section '## {section}'",
+                       f"add '## {section}' to the body in the canonical order"))
+    if not missing and found_order != expected_order:
+        errors.append((
+            path, None,
+            "sections are out of order: " + " -> ".join(found_order),
+            "reorder sections to: " + " -> ".join(expected_order),
+        ))
+
+    by_name = {name: (start, end) for name, (start, end) in
+               _section_ranges(section_positions, len(lines)).items()}
+
+    # Check 9: Tasks contains at least one checklist item.
+    tasks_range = by_name.get("Tasks")
+    if tasks_range is not None:
+        start, end = tasks_range
+        tasks_body = "\n".join(lines[start:end])
+        if not CHECKLIST_PATTERN.search(tasks_body):
+            errors.append((path, start + 1,
+                           "'## Tasks' section has no checklist item (`- [ ]` or `- [x]`)",
+                           "add at least one '- [ ] <task>' line"))
+
+    # Check 10: Open Questions is non-empty (more than whitespace and the heading).
+    oq_range = by_name.get("Open Questions")
+    if oq_range is not None:
+        start, end = oq_range
+        oq_body = "\n".join(lines[start:end]).strip()
+        # Drop HTML comments so a guidance-only section still counts as empty.
+        stripped = re.sub(r"<!--.*?-->", "", oq_body, flags=re.DOTALL).strip()
+        if not stripped:
+            errors.append((path, start + 1,
+                           "'## Open Questions' is empty",
+                           "list at least one open question — if you have none, "
+                           "you have not thought hard enough about edge cases"))
+
+    return errors
+
+
+def _find_sections(body: str, lines_offset: int) -> list[tuple[str, int]]:
+    """Return [(section_name, absolute_line_index), ...] for every ## heading."""
+    out: list[tuple[str, int]] = []
+    for i, line in enumerate(body.splitlines()):
+        match = SECTION_PATTERN.match(line)
+        if match:
+            out.append((match.group(1).strip(), lines_offset + i))
+    return out
+
+
+def _section_ranges(
+    positions: list[tuple[str, int]], total_lines: int
+) -> dict[str, tuple[int, int]]:
+    """Map section name -> (heading_line_index, next_heading_index_exclusive)."""
+    ranges: dict[str, tuple[int, int]] = {}
+    for idx, (name, start) in enumerate(positions):
+        end = positions[idx + 1][1] if idx + 1 < len(positions) else total_lines
+        # The heading itself is at `start`; body lives in [start+1, end).
+        ranges[name] = (start + 1, end)
+    return ranges
+
+
+def _is_valid_iso_date(value: object) -> bool:
+    # TOML's native date/datetime types parse cleanly.
+    if isinstance(value, (_dt.date, _dt.datetime)):
+        return True
+    if isinstance(value, str):
+        try:
+            _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return True
+        except ValueError:
+            try:
+                _dt.date.fromisoformat(value)
+                return True
+            except ValueError:
+                return False
+    return False
+
+
+def _format_errors(errors: Errors) -> str:
+    out: list[str] = []
+    for path, lineno, msg, fix in errors:
+        locus = f"{path}:{lineno}" if lineno is not None else str(path)
+        out.append(f"{locus}: {msg}")
+        out.append(f"  fix: {fix}")
+    return "\n".join(out)
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) < 2:
+        print("usage: rfc-lint <file.md> [<file.md> ...]", file=sys.stderr)
+        return 2
+
+    all_errors: Errors = []
+    for arg in argv[1:]:
+        path = Path(arg)
+        if not path.is_file():
+            all_errors.append((path, None, "no such file", "check the path"))
+            continue
+        all_errors.extend(lint_file(path))
+
+    if all_errors:
+        print(_format_errors(all_errors), file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

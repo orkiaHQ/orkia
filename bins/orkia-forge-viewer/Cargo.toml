@@ -1,0 +1,28 @@
+[package]
+name = "orkia-forge-viewer-bin"
+version = "0.1.0"
+edition.workspace = true
+rust-version = "1.85"
+license = "Elastic-2.0"
+description = "Orkia Forge viewer binary (Tauri 2.x webview shell)"
+
+[[bin]]
+name = "orkia-forge-viewer"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+orkia-forge-viewer = { workspace = true }
+orkia-forge-types = { workspace = true }
+orkia-forge-permissions = { workspace = true }
+orkia-forge-seal = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+uuid = { workspace = true }
+tauri = { version = "2", features = [] }
+ctrlc = { version = "3", features = ["termination"] }
+
+[dev-dependencies]
+tempfile = "3"

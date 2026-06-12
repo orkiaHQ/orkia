@@ -1,0 +1,41 @@
+[package]
+name = "orkia-cage"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license = "Elastic-2.0"
+description = "Execution-boundary launcher for vendor agents (Orkia Cage V1)"
+
+# The launcher logic is a library so an enterprise build can call
+# `orkia_cage::run` with a real Trust Atlas adjuster through the Model-A slot.
+# The OSS `orkia-cage` bin is a thin shim that passes `None` (inert).
+[lib]
+name = "orkia_cage"
+path = "src/lib.rs"
+
+[[bin]]
+name = "orkia-cage"
+path = "src/main.rs"
+
+[dependencies]
+# Only the `Policy` data type — the cage takes a concrete policy file and parses
+# This keeps the security-critical launcher minimal rather than pulling the whole
+# `orkia-shell` crate in for one struct.
+orkia-shell-types = { workspace = true }
+toml = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# pivot_root via nix. Linux-only — never compiled on macOS.
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { version = "0.29", features = ["sched", "mount", "user", "process", "fs", "hostname", "signal"] }
+libc = { workspace = true }
+
+# macOS: only for `getuid()` (claude's per-uid /tmp staging dir, §13.5).
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

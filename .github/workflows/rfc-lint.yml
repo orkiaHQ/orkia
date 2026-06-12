@@ -1,0 +1,55 @@
+name: rfc-lint
+
+# Lint contributor RFCs on every PR that touches rfcs/. We do not run this
+# on push to keep normal code PRs free of any RFC-related overhead.
+on:
+  pull_request:
+    paths:
+      - 'rfcs/**/*.md'
+      - 'script/rfc-lint'
+      - '.github/workflows/rfc-lint.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rfc-lint:
+    name: rfc-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Collect RFCs to lint
+        id: collect
+        run: |
+          set -euo pipefail
+          # Lint every RFC under rfcs/, including rfcs/completed/ and TEMPLATE.md.
+          # Exclude rfcs/decisions/ — decision memos are not RFCs and have a
+          # different shape (see CONTRIBUTING.md).
+          files=$(find rfcs -type f -name '*.md' -not -path 'rfcs/decisions/*' | sort)
+          if [ -z "$files" ]; then
+            echo "No RFC files found — nothing to lint." >&2
+            echo "files=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "Files to lint:" >&2
+          echo "$files" >&2
+          # Pass file list as a single arg via output file (handles newlines).
+          {
+            echo 'files<<RFCEOF'
+            echo "$files"
+            echo 'RFCEOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Run rfc-lint
+        if: steps.collect.outputs.files != ''
+        run: |
+          set -euo pipefail
+          # shellcheck disable=SC2046
+          xargs python3 script/rfc-lint <<< "${{ steps.collect.outputs.files }}"

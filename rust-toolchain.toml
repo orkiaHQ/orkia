@@ -1,0 +1,7 @@
+[toolchain]
+# Pinned to ensure reproducible builds across contributors and CI.
+# Public-launch MSRV is 1.92, not 1.91. Bumped from 1.91.0 to 1.92.0 so wasmtime >= 44.0.2 (security fixes
+# SEC-DEP-001..004) can be used: wasmtime 44 requires rustc ≥ 1.92.
+# Floor MSRV is declared in `Cargo.toml` (`rust-version`).
+channel = "1.92.0"
+components = ["rustfmt", "clippy"]
