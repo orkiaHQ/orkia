@@ -247,11 +247,7 @@ mod target_tests {
         for (owner, id, stage) in cases {
             let rendered = render_job_id(owner, id, stage);
             let parsed = parse_job_target(&rendered);
-            assert_eq!(
-                parsed.core,
-                id.to_string(),
-                "core mismatch for {rendered}"
-            );
+            assert_eq!(parsed.core, id.to_string(), "core mismatch for {rendered}");
             assert_eq!(parsed.stage, stage, "stage mismatch for {rendered}");
             assert_eq!(
                 parsed.prefer_daemon,

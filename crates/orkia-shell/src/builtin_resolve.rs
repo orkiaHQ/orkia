@@ -255,11 +255,8 @@ mod tests {
         // A local job renders `[N]` (bash) — feeding that back must resolve to it.
         let jobs = vec![shell_job(1, "make"), agent_job(2, "faye")];
         for id in [1u32, 2] {
-            let rendered = orkia_shell_types::render_job_id(
-                orkia_shell_types::JobOwner::Local,
-                id,
-                None,
-            );
+            let rendered =
+                orkia_shell_types::render_job_id(orkia_shell_types::JobOwner::Local, id, None);
             assert_eq!(rendered, format!("[{id}]"));
             assert_eq!(
                 resolve_job_target(&rendered, &jobs),

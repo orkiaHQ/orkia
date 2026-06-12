@@ -193,7 +193,9 @@ fn daemon_detach_ps_tell_attach_and_kill_round_trip() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("[1] detached"), "stdout={stdout}");
+    // Daemon-owned jobs render with a trailing `*` (render_job_id), and the
+    // spawn line reports the agent + pid: `[1]* detached: echo pid=N`.
+    assert!(stdout.contains("[1]* detached"), "stdout={stdout}");
 
     let cache = orkia_dir
         .join("run")

@@ -118,6 +118,14 @@ jobs:
           sudo apt-get install -y \
             libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
             libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - name: Export kernel trust anchor
+        # SEC-003: release builds (--release) fail to compile without the
+        # embedded kernel-signing pubkey. Canonical copy: kernel-pubkey.hex
+        # at the repo root — a committed public file, not a secret, so this
+        # is safe for fork PRs.
+        run: |
+          echo "ORKIA_KERNEL_PUBKEY_HEX=$(tr -d '[:space:]' < kernel-pubkey.hex)" \
+            >> "$GITHUB_ENV"
       - name: Build orkia + orkia-fake-agent
         run: cargo build --release --bin orkia --bin orkia-fake-agent
       - name: Run harness tests
@@ -144,6 +152,14 @@ jobs:
           sudo apt-get install -y \
             libgtk-3-dev libwebkit2gtk-4.1-dev libsoup-3.0-dev \
             libayatana-appindicator3-dev librsvg2-dev pkg-config
+      - name: Export kernel trust anchor
+        # SEC-003: release builds (--release) fail to compile without the
+        # embedded kernel-signing pubkey. Canonical copy: kernel-pubkey.hex
+        # at the repo root — a committed public file, not a secret, so this
+        # is safe for fork PRs.
+        run: |
+          echo "ORKIA_KERNEL_PUBKEY_HEX=$(tr -d '[:space:]' < kernel-pubkey.hex)" \
+            >> "$GITHUB_ENV"
       - run: cargo build --release --bin orkia
       - name: Smoke (--version)
         run: ./target/release/orkia --version
