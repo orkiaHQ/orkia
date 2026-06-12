@@ -82,6 +82,15 @@ jobs:
         run: |
           echo "ORKIA_KERNEL_PUBKEY_HEX=$(tr -d '[:space:]' < kernel-pubkey.hex)" \
             >> "$GITHUB_ENV"
+      - name: Add Rust target
+        # rust-toolchain.toml pins channel 1.92.0, but the toolchain
+        # action adds the target to `stable`. cargo then builds with the
+        # pinned toolchain (override file), which lacks the target ->
+        # "can't find crate for core". Add it explicitly in the repo dir
+        # so the override routes it to 1.92.0. musl uses `cross`, which
+        # provisions its own in-container target std, so skip it there.
+        if: ${{ !contains(matrix.target, 'musl') }}
+        run: rustup target add ${{ matrix.target }}
       - name: Build
         env:
           # Stamped into the binary via option_env! so `orkia update
