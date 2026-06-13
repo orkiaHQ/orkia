@@ -427,13 +427,32 @@ fn install_timeout(config: &ShellConfig, stream: &UnixStream) -> Result<(), Stri
 }
 
 fn start_daemon_process() -> Result<(), String> {
+    use std::os::unix::process::CommandExt;
+
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    std::process::Command::new(exe)
-        .arg("pty-daemon")
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("pty-daemon")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
+        .stderr(std::process::Stdio::null());
+    // The daemon outlives this shell and owns only its own socket (bound by
+    // path). Any fd it inherits here it pins for its whole life — and on macOS
+    // a concurrent `Command::spawn` elsewhere can leak a pipe end into our fd
+    // table before that pipe's CLOEXEC lands (no atomic `pipe2`). A leaked
+    // stdin write-end keeps a sibling shell's `read_line` from ever seeing EOF.
+    // Start the daemon with a clean table: close everything >= 3.
+    //
+    // SAFETY: only async-signal-safe libc calls run in the forked child.
+    unsafe {
+        cmd.pre_exec(|| {
+            let max = libc::sysconf(libc::_SC_OPEN_MAX) as libc::c_int;
+            for fd in 3..max {
+                libc::close(fd);
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn()
         .map(|_| ())
         .map_err(|e| format!("spawn daemon: {e}"))
 }

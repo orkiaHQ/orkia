@@ -14,6 +14,7 @@
 
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::sync::Mutex;
 
 use tempfile::TempDir;
 
@@ -21,19 +22,31 @@ fn orkia_bin() -> &'static str {
     env!("CARGO_BIN_EXE_orkia")
 }
 
+/// Serializes the `Command::spawn` window across the test threads. On macOS
+/// `std` lacks atomic `pipe2(O_CLOEXEC)`; it sets `CLOEXEC` with a separate
+/// `ioctl` after `pipe()`. When these slug-addressed cases run in parallel,
+/// one thread's `fork` can land inside that window and inherit another
+/// thread's stdin pipe end — pinning the victim shell's `read_line` open so it
+/// never sees EOF (a 6-hour hang). Holding this lock only across `spawn`
+/// closes the window while keeping the tests otherwise parallel.
+static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
 /// Run a newline-separated REPL script through `orkia --no-tui` in a fresh
 /// `$HOME`, returning combined stdout+stderr.
 fn run_script(home: &TempDir, script: &str) -> String {
-    let mut child = Command::new(orkia_bin())
-        .arg("--no-tui")
-        .env("HOME", home.path())
-        .env("EDITOR", "true")
-        .env("VISUAL", "true")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn orkia --no-tui");
+    let spawned = {
+        let _guard = SPAWN_LOCK.lock().expect("spawn lock");
+        Command::new(orkia_bin())
+            .arg("--no-tui")
+            .env("HOME", home.path())
+            .env("EDITOR", "true")
+            .env("VISUAL", "true")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    };
+    let mut child = spawned.expect("spawn orkia --no-tui");
     child
         .stdin
         .take()
