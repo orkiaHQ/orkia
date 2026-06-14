@@ -74,13 +74,24 @@ pub struct NativeRegistration {
 
 impl JobController {
     pub fn new() -> (Self, mpsc::UnboundedReceiver<JobEvent>) {
+        Self::with_next_id(1)
+    }
+
+    /// Like [`JobController::new`] but seeds the first job id. A detached
+    /// agent runtime passes its daemon-assigned job id (`ORKIA_DETACHED_JOB_ID`,
+    /// via [`crate::detached_control::detached_runtime_job_id`]) so the one
+    /// agent it hosts is allocated *that* id instead of a fresh `1` — keeping
+    /// `ORKIA_JOB_ID`, the storage dir and the `FinalResponseEvent.job_id` the
+    /// dispatch proxy routes on globally unique across concurrent runtimes.
+    /// The main REPL keeps `1`.
+    pub fn with_next_id(next_id: u32) -> (Self, mpsc::UnboundedReceiver<JobEvent>) {
         let (tx, rx) = mpsc::unbounded_channel();
         (
             Self {
                 jobs: Vec::new(),
                 forge_jobs: Vec::new(),
                 native_jobs: Vec::new(),
-                next_id: 1,
+                next_id,
                 event_tx: tx,
             },
             rx,

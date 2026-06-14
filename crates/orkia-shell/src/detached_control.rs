@@ -117,7 +117,7 @@ pub fn spawn_from_env() -> Option<mpsc::Receiver<ControlCommand>> {
 /// daemon, which relays to the main REPL. The job id is parsed as `u32`
 /// (untrusted env, #7): a missing or non-numeric value yields `None`.
 pub fn detached_runtime_hub_socket(data_dir: &Path) -> Option<PathBuf> {
-    let id: u32 = std::env::var("ORKIA_DETACHED_JOB_ID").ok()?.parse().ok()?;
+    let id = detached_runtime_job_id()?;
     Some(
         data_dir
             .join("run")
@@ -125,6 +125,23 @@ pub fn detached_runtime_hub_socket(data_dir: &Path) -> Option<PathBuf> {
             .join(id.to_string())
             .join("agent.sock"),
     )
+}
+
+/// The daemon-assigned job id of this detached runtime (the globally-unique
+/// id the pty-daemon allocated, passed in `ORKIA_DETACHED_JOB_ID`). `None`
+/// for the main interactive REPL, which has no such env. The single agent a
+/// detached runtime hosts adopts this id (see `JobController::with_next_id`)
+/// so its `ORKIA_JOB_ID`, storage dir, per-job hub socket and the
+/// `FinalResponseEvent.job_id` the dispatch proxy routes on all agree — two
+/// concurrent detached runtimes can no longer both number their agent `1`.
+/// Untrusted env (#7): a non-numeric value or the reserved sentinel `0`
+/// yields `None`.
+pub fn detached_runtime_job_id() -> Option<u32> {
+    std::env::var("ORKIA_DETACHED_JOB_ID")
+        .ok()?
+        .parse::<u32>()
+        .ok()
+        .filter(|&id| id != 0)
 }
 
 fn spawn(path: PathBuf) -> Result<mpsc::Receiver<ControlCommand>, String> {
@@ -476,6 +493,39 @@ mod hub_socket_tests {
             std::env::remove_var("ORKIA_DETACHED_JOB_ID");
         }
         assert_eq!(detached_runtime_hub_socket(data_dir), None);
+
+        // SAFETY: restore prior state under the same guard.
+        unsafe {
+            match prev {
+                Some(v) => std::env::set_var("ORKIA_DETACHED_JOB_ID", v),
+                None => std::env::remove_var("ORKIA_DETACHED_JOB_ID"),
+            }
+        }
+    }
+
+    #[test]
+    fn job_id_parses_rejects_zero_and_garbage() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let prev = std::env::var_os("ORKIA_DETACHED_JOB_ID");
+
+        // SAFETY: process-wide env mutation serialized on `ENV_LOCK`.
+        unsafe {
+            std::env::set_var("ORKIA_DETACHED_JOB_ID", "7");
+        }
+        assert_eq!(detached_runtime_job_id(), Some(7));
+
+        // Reserved sentinel `0` (a bare shell job's id) is never a detached
+        // runtime id → None, so the main REPL's `unwrap_or(1)` still applies.
+        unsafe {
+            std::env::set_var("ORKIA_DETACHED_JOB_ID", "0");
+        }
+        assert_eq!(detached_runtime_job_id(), None);
+
+        // Non-numeric garbage is rejected (#7 — untrusted env).
+        unsafe {
+            std::env::set_var("ORKIA_DETACHED_JOB_ID", "nope");
+        }
+        assert_eq!(detached_runtime_job_id(), None);
 
         // SAFETY: restore prior state under the same guard.
         unsafe {

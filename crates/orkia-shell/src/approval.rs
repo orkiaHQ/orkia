@@ -135,7 +135,7 @@ impl ApprovalWatcher {
     /// off the REPL thread (during `tick`/dispatch). Keeping it inline
     /// is fine — invariant #1 covers the drain prelude, not dispatch.
     pub fn create_job_dir(&self, job_id: JobId) -> PathBuf {
-        let dir = self.run_dir.join(format!("{}", job_id.0));
+        let dir = self.run_dir.join(job_dir_name(job_id));
         // If this fails the agent gets a non-existent ORKIA_RUN_DIR and its
         // approval writes fail silently; at least surface the cause (BUG-098).
         if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -211,7 +211,7 @@ impl ApprovalWatcher {
         // Hook approvals do not own a request file; we still synthesize
         // a path under run_dir so log/debug output has somewhere to
         // point. `resolve` skips the file write for `Hook` sources.
-        let dir = self.run_dir.join(format!("{}", job_id.0));
+        let dir = self.run_dir.join(job_dir_name(job_id));
         self.pending.push(PendingApproval {
             job_id,
             request,
@@ -306,7 +306,7 @@ fn janitor_loop(run_dir: PathBuf, cmd_rx: Receiver<Cmd>, discovery_tx: Sender<Pe
             }
             Cmd::Cleanup(job_id) => {
                 seen.remove(&job_id.0);
-                let dir = run_dir.join(format!("{}", job_id.0));
+                let dir = run_dir.join(job_dir_name(job_id));
                 if let Err(e) = std::fs::remove_dir_all(&dir)
                     && e.kind() != std::io::ErrorKind::NotFound
                 {
@@ -318,6 +318,25 @@ fn janitor_loop(run_dir: PathBuf, cmd_rx: Receiver<Cmd>, discovery_tx: Sender<Pe
                 }
             }
         }
+    }
+}
+
+/// Per-job run-dir name component under `<data_dir>/run/`.
+///
+/// In a detached runtime the daemon-global job id (`ORKIA_DETACHED_JOB_ID`)
+/// prefixes the runtime-local id, so two concurrent detached runtimes —
+/// each allocating runtime-local ids from 1 — never collide on the same
+/// `<data_dir>/run/<name>` directory (which holds the agent's
+/// `mcp-config.json`, `context.md`, hooks and approval files). The local
+/// suffix keeps it unique if a single runtime ever hosts more than one job.
+/// The main REPL has no `ORKIA_DETACHED_JOB_ID`, so its bare-id layout is
+/// unchanged. Reading the env here mirrors the recursion guard in
+/// `pty_daemon::detached_spawner` — the value is set once at spawn and never
+/// mutates, so it is identical across the REPL and janitor threads.
+fn job_dir_name(job_id: JobId) -> String {
+    match std::env::var("ORKIA_DETACHED_JOB_ID") {
+        Ok(daemon) if !daemon.is_empty() => format!("{daemon}-{}", job_id.0),
+        _ => format!("{}", job_id.0),
     }
 }
 
@@ -336,7 +355,7 @@ fn scan_jobs(
         if seen.contains(&job_id.0) {
             continue;
         }
-        let dir = run_dir.join(format!("{}", job_id.0));
+        let dir = run_dir.join(job_dir_name(job_id));
         let request_path = dir.join("approval.request.json");
         let response_path = dir.join("approval.response.json");
         if response_path.exists() || !request_path.exists() {

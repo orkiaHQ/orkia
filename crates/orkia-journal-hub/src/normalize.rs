@@ -30,7 +30,14 @@
 //! falls back to `None` so the listener can log and drop instead
 //! of crashing.
 
+use orkia_shell_types::input_limits::JOURNAL_LINE_MAX_BYTES;
 use orkia_shell_types::journal::types::{EventType, JournalEnvelope};
+
+/// Upper bound on an inlined `last_assistant_message`. Half the journal
+/// line cap, leaving generous headroom for the rest of the Stop envelope
+/// (session_id, paths, model, …) so stashing the final text can never push
+/// the line past `JOURNAL_LINE_MAX_BYTES` and get the whole Stop dropped.
+const STOP_FINAL_MESSAGE_MAX_BYTES: usize = JOURNAL_LINE_MAX_BYTES / 2;
 
 /// Build a `JournalEnvelope` from a provider's raw hook JSON value.
 /// Returns `None` when the value doesn't even contain an event
@@ -71,6 +78,23 @@ pub fn normalize_hook_value(source: &str, raw: &serde_json::Value) -> Option<Jou
         if let Some(v) = raw.get(key).and_then(|v| v.as_str()) {
             extra.insert(key.to_string(), serde_json::Value::String(v.to_string()));
         }
+    }
+    // Claude's Stop hook delivers the turn's final assistant text inline as
+    // `last_assistant_message`. Carrying it lets the final-response service
+    // capture the turn directly, without racing (or depending on) the
+    // transcript-file flush. Only stash it when it fits comfortably under
+    // the journal line cap (`JOURNAL_LINE_MAX_BYTES`, 256 KiB) — an
+    // oversize Stop line is dropped wholesale by the listener, which would
+    // lose the Stop event itself. Past the cap we omit it and let the
+    // extractor fall back to the on-disk transcript (the only correct
+    // source for a response that large anyway).
+    if let Some(v) = raw.get("last_assistant_message").and_then(|v| v.as_str())
+        && v.len() <= STOP_FINAL_MESSAGE_MAX_BYTES
+    {
+        extra.insert(
+            "last_assistant_message".to_string(),
+            serde_json::Value::String(v.to_string()),
+        );
     }
 
     Some(JournalEnvelope {
@@ -223,6 +247,32 @@ mod tests {
     #[test]
     fn malformed_json_returns_none() {
         assert!(try_recover_hook_line("{not json").is_none());
+    }
+
+    #[test]
+    fn stop_carries_last_assistant_message() {
+        let line = r#"{"_source":"claude","hook_event_name":"Stop","last_assistant_message":"PONG"}"#;
+        let env = try_recover_hook_line(line).expect("recover");
+        assert_eq!(env.event.as_deref(), Some("Stop"));
+        assert_eq!(
+            env.extra
+                .get("last_assistant_message")
+                .and_then(|v| v.as_str()),
+            Some("PONG")
+        );
+    }
+
+    #[test]
+    fn oversize_last_assistant_message_is_omitted() {
+        let big = "x".repeat(STOP_FINAL_MESSAGE_MAX_BYTES + 1);
+        let raw = serde_json::json!({
+            "_source": "claude",
+            "hook_event_name": "Stop",
+            "last_assistant_message": big,
+        });
+        let env = normalize_hook_value("claude", &raw).expect("normalize");
+        // Over the cap → not stashed; the extractor falls back to the file.
+        assert!(env.extra.get("last_assistant_message").is_none());
     }
 
     #[test]

@@ -262,6 +262,15 @@ impl JournalStopHook for FinalResponseService {
             .get("cwd")
             .and_then(|v| v.as_str())
             .map(std::path::PathBuf::from);
+        // Claude stashes the turn's closing text in the Stop payload as
+        // `last_assistant_message`; `normalize` carries it (capped) into
+        // `extra`. When present, the claude extractor returns it directly
+        // and skips the transcript-flush race entirely.
+        let final_message_hint = env
+            .extra
+            .get("last_assistant_message")
+            .and_then(|v| v.as_str())
+            .map(str::to_owned);
         let ctx = ExtractionContext {
             job_id,
             agent,
@@ -271,6 +280,7 @@ impl JournalStopHook for FinalResponseService {
             // Production confines hints to each provider's real transcripts
             // dir; only tests override this (SEC-029).
             confine_root: None,
+            final_message_hint,
         };
         // `spawn_extraction` requires `Arc<Self>`; recover the strong
         // ref via the weak handle installed by `into_arc`.
@@ -496,6 +506,7 @@ mod tests {
             transcript_path_hint: None,
             spawn_cwd: None,
             confine_root: None,
+            final_message_hint: None,
         }
     }
 

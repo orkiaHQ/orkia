@@ -117,6 +117,19 @@ fn stop_sends_signal_and_marks_done() {
 }
 
 #[test]
+fn with_next_id_seeds_the_first_allocated_job() {
+    // A detached agent runtime adopts the daemon-assigned job id for the one
+    // agent it hosts, instead of restarting the per-runtime counter at 1.
+    // Seeding `next_id` is what keeps two concurrent detached runtimes from
+    // both allocating id 1 and cross-wiring their FinalResponse events.
+    let (mut ctrl, _rx) = JobController::with_next_id(7);
+    let dir = tempdir();
+    let id = spawn(&mut ctrl, &dir, vec!["-c".into(), "sleep 10".into()]);
+    assert_eq!(id, orkia_shell::JobId(7));
+    let _ = ctrl.stop(id);
+}
+
+#[test]
 fn reap_removes_completed_jobs() {
     let (mut ctrl, _rx) = JobController::new();
     let dir = tempdir();

@@ -266,6 +266,7 @@ mod tests {
             transcript_path_hint: Some(path),
             spawn_cwd: None,
             confine_root,
+            final_message_hint: None,
         }
     }
 
@@ -332,6 +333,7 @@ mod tests {
             transcript_path_hint: Some(PathBuf::from("/nope/does/not/exist.jsonl")),
             spawn_cwd: None,
             confine_root: None,
+            final_message_hint: None,
         };
         // No CODEX_HOME with sessions either, so resolve_path returns
         // None → NotFound.

@@ -36,6 +36,16 @@ pub struct ExtractionContext {
     /// `$CODEX_HOME`, `~/.gemini/tmp`). Set only in tests to point
     /// confinement at a tempdir.
     pub confine_root: Option<PathBuf>,
+    /// Final assistant text the provider delivered *in the Stop hook
+    /// payload itself* (Claude's `last_assistant_message`). When present
+    /// this is authoritative and race-free — it arrives synchronously with
+    /// the Stop event, so the extractor returns it directly instead of
+    /// re-reading a transcript file that the provider may not have flushed
+    /// yet (or, for an orkia-spawned Claude TUI, never writes to disk at
+    /// all). `None` → fall back to the on-disk transcript. Oversize
+    /// messages are not carried here (see the normalize cap), so this
+    /// never forces a giant Stop envelope.
+    pub final_message_hint: Option<String>,
 }
 
 /// Failure modes for transcript extraction. `TranscriptNotFound` and

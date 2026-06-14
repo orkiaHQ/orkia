@@ -77,6 +77,19 @@ impl TranscriptExtractor for ClaudeExtractor {
         &self,
         ctx: &ExtractionContext,
     ) -> Result<String, ExtractionError> {
+        // Claude's Stop hook payload carries the turn's final assistant
+        // text in `last_assistant_message`. When present it is the
+        // authoritative, synchronous source — return it directly rather
+        // than racing the transcript flush (the `Stop` hook routinely
+        // beats the JSONL write by tens of ms, and an orkia-spawned TUI
+        // may never persist the transcript at all). The on-disk transcript
+        // remains the fallback for turns where the payload omits the text
+        // (e.g. a tool_use-only tail, where the hint is absent).
+        if let Some(msg) = ctx.final_message_hint.as_deref()
+            && !msg.is_empty()
+        {
+            return Ok(msg.to_string());
+        }
         let path = resolve_path(ctx).ok_or(ExtractionError::TranscriptNotFound)?;
         let file = File::open(&path).map_err(map_open_err)?;
         let reader = BufReader::new(file);
@@ -226,6 +239,7 @@ mod tests {
             transcript_path_hint: Some(path),
             spawn_cwd: None,
             confine_root,
+            final_message_hint: None,
         }
     }
 
@@ -302,6 +316,7 @@ mod tests {
             transcript_path_hint: Some(PathBuf::from("/nope/does/not/exist.jsonl")),
             spawn_cwd: None,
             confine_root: None,
+            final_message_hint: None,
         };
         let err = ClaudeExtractor
             .extract_final_assistant_text(&ctx)
@@ -320,6 +335,47 @@ mod tests {
             .extract_final_assistant_text(&ctx_with_path(path))
             .expect_err("err");
         assert!(matches!(err, ExtractionError::NoAssistantMessage));
+    }
+
+    /// The Stop-payload `last_assistant_message` (carried as
+    /// `final_message_hint`) is authoritative: it is returned directly
+    /// even when no transcript file exists on disk — the exact case of an
+    /// orkia-spawned Claude TUI, which fires Stop but never writes the
+    /// JSONL the hint path points at.
+    #[test]
+    fn final_message_hint_short_circuits_missing_transcript() {
+        let ctx = ExtractionContext {
+            job_id: 1,
+            agent: "faye".into(),
+            session_id: Some("no-such".into()),
+            transcript_path_hint: Some(PathBuf::from("/nope/does/not/exist.jsonl")),
+            spawn_cwd: None,
+            confine_root: None,
+            final_message_hint: Some("PONG".into()),
+        };
+        let out = ClaudeExtractor
+            .extract_final_assistant_text(&ctx)
+            .expect("hint returned directly");
+        assert_eq!(out, "PONG");
+    }
+
+    /// An empty hint is not a turn's text — fall through to the transcript
+    /// (here absent → TranscriptNotFound), never persist a spurious "".
+    #[test]
+    fn empty_final_message_hint_falls_back_to_transcript() {
+        let ctx = ExtractionContext {
+            job_id: 1,
+            agent: "faye".into(),
+            session_id: Some("no-such".into()),
+            transcript_path_hint: Some(PathBuf::from("/nope/does/not/exist.jsonl")),
+            spawn_cwd: None,
+            confine_root: None,
+            final_message_hint: Some(String::new()),
+        };
+        let err = ClaudeExtractor
+            .extract_final_assistant_text(&ctx)
+            .expect_err("empty hint must not short-circuit");
+        assert!(matches!(err, ExtractionError::TranscriptNotFound));
     }
 
     // --- SEC-029: path confinement tests ---

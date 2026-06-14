@@ -33,7 +33,13 @@ impl Repl {
             std::sync::Arc::new(parking_lot::RwLock::new(std::collections::HashMap::new()));
         let history = History::new(&config.data_dir);
         let agents = config.agents.clone();
-        let (jobs, job_events) = JobController::new();
+        // A detached agent runtime adopts the daemon's job id for the single
+        // agent it hosts, so its `ORKIA_JOB_ID` / storage dir / dispatch
+        // `FinalResponseEvent.job_id` stay globally unique across concurrent
+        // runtimes (two roots of a dispatch diamond would otherwise both be
+        // `1` and cross-wire in the proxy). Main REPL → `1`.
+        let next_job_id = crate::detached_control::detached_runtime_job_id().unwrap_or(1);
+        let (jobs, job_events) = JobController::with_next_id(next_job_id);
         let approvals = ApprovalWatcher::new(&config.data_dir);
         let attention = AttentionCoordinator::spawn();
         let journal_store = JournalStore::new(&config.data_dir);

@@ -20,7 +20,16 @@ pub(crate) fn build_agent_job_config(input: AgentJobConfigInput<'_>) -> crate::j
     let provider = orkia_shell_types::ProviderId::derive(input.hooks_provider, input.cmd);
 
     let mut attachments: Vec<Attachment> = Vec::with_capacity(6);
-    if input.hooks_provider.is_some() {
+    // Install provider hooks whenever the RESOLVED provider supports hook
+    // capture — `provider` is already derived from the runtime command
+    // (so `command = "claude"` resolves to Claude even without a redundant
+    // `[hooks] provider`). Hooks are the whole approval + SEAL +
+    // final-response-capture story (engineering principle #5): a
+    // claude/codex/gemini runtime must never spawn without them, else its
+    // turns run but the Stop hook never fires and the final response is
+    // never captured. A bare shell command resolves to Generic (no
+    // capture capability) and is correctly skipped.
+    if provider.capabilities().hooks_capture {
         attachments.push(Attachment::Hooks {
             // The `orkia-sh hook` PreToolUse entry is the **macOS** per-command
             // Linux the gate is the sole-shell `-c` shim, and the host orkia-sh

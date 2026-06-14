@@ -290,6 +290,7 @@ mod tests {
             transcript_path_hint: Some(path),
             spawn_cwd: None,
             confine_root,
+            final_message_hint: None,
         }
     }
 
