@@ -32,11 +32,12 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, rea
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
 use orkia_rfc_core::frontmatter::{OperatorConstraints, OperatorFrontmatterBlock};
 use orkia_rfc_core::{RfcId, RfcStore};
+use orkia_shell::agent_context::AgentContext;
 use orkia_shell::approval::ApprovalWatcher;
 use orkia_shell::hooks::install_hooks;
 use orkia_shell::injection_executor::{InjectionExecutor, output_transcript_probe};
 use orkia_shell::job::JobController;
-use orkia_shell::job::config::JobConfig;
+use orkia_shell::job::config::{Attachment, JobConfig};
 use orkia_shell::job::spawn::SpawnDeps;
 use orkia_shell::journal::{JournalEnvelope, JournalListener, LiveJournalHandlers};
 use orkia_shell::protocol::{EventRouter, FanoutConfig};
@@ -120,6 +121,66 @@ async fn real_agent_operator_drift_flows_from_hook_to_notification() {
     let mut output = String::new();
     let event = fixture
         .recv_operator_event(&mut session, &mut output, Duration::from_secs(90))
+        .await;
+    assert_eq!(event.event.as_deref(), Some("operator.drift_detected"));
+    assert!(
+        event
+            .message
+            .as_deref()
+            .unwrap_or_default()
+            .contains("outside allowed_paths"),
+        "expected hard drift notification; event={event:?}; pty output:\n{output}"
+    );
+    let suggestion = fixture
+        .recv_operator_event(&mut session, &mut output, Duration::from_secs(10))
+        .await;
+    assert_eq!(
+        suggestion.event.as_deref(),
+        Some("operator.suggestion_created")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+#[ignore = "requires ORKIA_QA_AGENT=claude and a locally authenticated interactive claude; drives the real TUI until a Write hook reaches the operator"]
+async fn real_claude_operator_drift_flows_from_hook_to_notification() {
+    // Real-agent acceptance for the drift detector (`operator.rs`) against a
+    // live claude TUI. Mirrors `real_agent_operator_drift_flows_from_hook_to_notification`
+    // but with claude-shaped readiness/trust handling and the claude bridge
+    // routing (HOME wrapper, same mechanism as the codex path).
+    //
+    // Flow: an RFC declares `allowed_paths = ["allowed/**"]`. We ask claude to
+    // create a file in the project root (outside `allowed/**`). Claude's
+    // PreToolUse hook for the Write reaches the operator, which emits a hard
+    // `operator.drift_detected` ("outside allowed_paths") followed by an inert
+    // `operator.suggestion_created`. Run it with:
+    //   ORKIA_QA_AGENT=claude cargo test -p orkia-shell \
+    //     --test agent_pty_attention_qa \
+    //     real_claude_operator_drift -- --ignored --nocapture
+    let qa = RealAgentQa::from_env();
+    assert_eq!(qa.provider, "claude", "set ORKIA_QA_AGENT=claude");
+    let mut fixture = OperatorQaFixture::new(&qa);
+    // Claude never takes the prompt as a `-p` arg (Invariant 5) — we inject it
+    // interactively once the TUI is ready, through the production injection path.
+    let mut session = fixture.spawn_agent(&qa, false);
+
+    // Detect trust/readiness against the rendered grid, not the raw byte
+    // stream: claude positions each word with an absolute cursor move, so
+    // multi-word phrases are only contiguous once the grid is rendered.
+    let startup = session.wait_snapshot(Duration::from_secs(45), |snap| {
+        claude_ready_for_prompt(snap) || claude_trust_prompt(snap)
+    });
+    if claude_trust_prompt(&startup) {
+        // Trust dialog defaults to the proceed option; Enter accepts it.
+        session.write_text("\r");
+        let _ = session.wait_snapshot(Duration::from_secs(30), claude_ready_for_prompt);
+    }
+    // PreToolUse fires before any permission dialog, so the drift surfaces even
+    // if claude then pauses to ask — we assert on the operator event, not the write.
+    session.write_text(OPERATOR_QA_PROMPT);
+
+    let mut output = String::new();
+    let event = fixture
+        .recv_operator_event(&mut session, &mut output, Duration::from_secs(120))
         .await;
     assert_eq!(event.event.as_deref(), Some("operator.drift_detected"));
     assert!(
@@ -403,6 +464,22 @@ impl RealAgentSession {
         String::from_utf8_lossy(&bytes).into_owned()
     }
 
+    /// Wait until the rendered grid satisfies `done`, polling the engine's
+    /// visible snapshot. Claude (Ink) positions each word with an absolute
+    /// cursor move, so multi-word phrases are never contiguous in the raw
+    /// byte stream — only the rendered grid has clean, readable text. Trust
+    /// and readiness detection must run against the grid, not the raw bytes.
+    fn wait_snapshot(&mut self, timeout: Duration, done: impl Fn(&str) -> bool) -> String {
+        let deadline = Instant::now() + timeout;
+        loop {
+            let snap = self.visible_snapshot();
+            if done(&snap) || Instant::now() >= deadline {
+                return snap;
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+    }
+
     fn write_control(&mut self, byte: u8) {
         self.jobs
             .write_to_pty(self.job_id, &[byte])
@@ -649,6 +726,51 @@ fn install_provider_hooks(
     if provider == ProviderId::Codex {
         patch_codex_hook_home(project_dir, bridge_home);
     }
+    if provider == ProviderId::Claude {
+        patch_claude_hook_home(project_dir, bridge_home);
+    }
+}
+
+/// Route claude's bridge hooks to the fixture journal the same way the codex
+/// path does: rewrite each `command` in `.claude/settings.json` to a wrapper
+/// that runs `orkia bridge` with `HOME` pointed at `bridge_home` (whose
+/// `.orkia` IS the fixture data_dir). Claude itself keeps the real `HOME` so
+/// its keychain auth still works — only the bridge subprocess is redirected.
+fn patch_claude_hook_home(project_dir: &std::path::Path, bridge_home: &std::path::Path) {
+    let path = project_dir.join(".claude").join("settings.json");
+    let raw = std::fs::read_to_string(&path).expect("read claude settings");
+    let mut settings: serde_json::Value =
+        serde_json::from_str(&raw).expect("parse claude settings");
+    let bridge = write_claude_bridge_wrapper(project_dir, bridge_home);
+    replace_hook_commands(&mut settings, &bridge.to_string_lossy());
+    std::fs::write(
+        &path,
+        serde_json::to_string_pretty(&settings).expect("serialize claude settings"),
+    )
+    .expect("write claude settings");
+}
+
+fn write_claude_bridge_wrapper(
+    project_dir: &std::path::Path,
+    bridge_home: &std::path::Path,
+) -> PathBuf {
+    let dir = project_dir.join(".orkia-qa");
+    std::fs::create_dir_all(&dir).expect("create hook wrapper dir");
+    let path = dir.join("claude-hook-bridge.sh");
+    // The spawn injects `ORKIA_SOCKET_PATH` pointing at the JobController's own
+    // run-dir socket (no listener in this fixture); claude's hook subprocess
+    // inherits it, and `orkia bridge`'s `socket_path()` prefers it over the
+    // HOME-derived path. Unset it so the bridge falls back to
+    // `$HOME/.orkia/run/orkia.sock` — which, with HOME=bridge_home, is exactly
+    // the fixture journal listener's socket.
+    let body = format!(
+        "#!/bin/sh\nunset ORKIA_SOCKET_PATH\nHOME={} exec {} bridge --source claude --scope job\n",
+        shell_quote(&bridge_home.to_string_lossy()),
+        shell_quote(&resolve_orkia_bridge_bin().to_string_lossy())
+    );
+    std::fs::write(&path, body).expect("write hook wrapper");
+    make_executable(&path);
+    path
 }
 
 fn prepare_agent_env(test_root: &std::path::Path, qa: &RealAgentQa) -> Vec<(String, String)> {
@@ -795,8 +917,24 @@ fn spawn_real_agent_in_project(spec: RealAgentSpawn<'_>) -> RealAgentSession {
     );
     let mut env = vec![("ORKIA_AGENT_NAME".into(), spec.qa.provider.clone())];
     env.extend(spec.extra_env);
+    // Claude renders its TUI inline on the primary screen (no alt-screen), so
+    // the engine reader only advances the alacritty grid — and thus the grid
+    // probe used for prompt detection and the visible snapshot only work — when
+    // the engine is marked persistent. Production marks an engine persistent iff
+    // the spawn carries an `AgentContext` (every `@agent` dispatch does). Attach
+    // a minimal one so claude spawns exactly as in production. Codex detects
+    // readiness off the raw output transcript, so it needs no agent context.
+    let attachments = if spec.qa.provider == "claude" {
+        vec![Attachment::AgentContext {
+            context: minimal_agent_context(),
+        }]
+    } else {
+        Vec::new()
+    };
     let config = JobConfig {
         command: &spec.qa.bin,
+        // Generic keeps the spawn plan from injecting provider MCP-config flags
+        // we don't want here; the attachment alone flips the engine persistent.
         provider: orkia_shell_types::ProviderId::Generic,
         args: &args,
         label: format!("{} ({})", spec.qa.provider, spec.qa.bin),
@@ -804,7 +942,7 @@ fn spawn_real_agent_in_project(spec: RealAgentSpawn<'_>) -> RealAgentSession {
         working_dir: Some(spec.project_dir.to_path_buf()),
         stdin: StdinSource::Pty,
         process_group: ProcessGroupMode::NewSession,
-        attachments: Vec::new(),
+        attachments,
         cage_wrapper: None,
     };
     let deps = SpawnDeps {
@@ -833,6 +971,21 @@ fn spawn_real_agent_in_project(spec: RealAgentSpawn<'_>) -> RealAgentSession {
         stopped: false,
         injection_executor: Some(injection_executor),
         delivery_rx: Some(delivery_rx),
+    }
+}
+
+/// A minimal `AgentContext` whose only purpose is to flip the engine into
+/// persistent (always-live grid) mode via `has_agent_context()`. Empty system
+/// prompt / memory / tools — we don't want any provider MCP-config args, just
+/// the persistent grid that claude's inline TUI needs to render and be probed.
+fn minimal_agent_context() -> AgentContext {
+    AgentContext {
+        name: "operator-qa".into(),
+        assembled: String::new(),
+        system_prompt: String::new(),
+        memory: String::new(),
+        tools: orkia_shell_types::AgentToolsFile::default(),
+        knowledge_mcp_bridge: false,
     }
 }
 
@@ -888,6 +1041,59 @@ fn codex_submit_was_accepted(output: &str) -> bool {
 
 fn codex_trust_prompt(output: &str) -> bool {
     output.contains("trust") && output.contains("Press enter")
+}
+
+/// Strip ANSI/VT escape sequences so phrase matching sees only the visible
+/// text. The grid snapshot interleaves SGR colour and cursor escapes between
+/// styled runs; without stripping, a phrase that crosses a style boundary
+/// would not match as a contiguous substring.
+fn strip_ansi(input: &str) -> String {
+    let mut out = String::with_capacity(input.len());
+    let mut bytes = input.bytes().peekable();
+    while let Some(b) = bytes.next() {
+        if b == 0x1b {
+            // CSI: ESC [ ... final-byte in 0x40..=0x7e; otherwise a short
+            // escape — drop the single following byte.
+            if bytes.peek() == Some(&b'[') {
+                bytes.next();
+                for c in bytes.by_ref() {
+                    if (0x40..=0x7e).contains(&c) {
+                        break;
+                    }
+                }
+            } else {
+                bytes.next();
+            }
+        } else {
+            out.push(b as char);
+        }
+    }
+    out
+}
+
+fn claude_ready_for_prompt(output: &str) -> bool {
+    // Real claude 2.1.177 ready screen markers (verified against the live TUI):
+    // the input box footer carries "auto mode on", the banner says "Welcome
+    // back". Older hints kept for forward/back compatibility across versions.
+    let text = strip_ansi(output);
+    text.contains("auto mode on")
+        || text.contains("shift+tab to cycle")
+        || text.contains("Welcome back")
+        || text.contains("for shortcuts")
+        || text.contains("Welcome to Claude")
+        || text.contains("? for help")
+        || text.contains("Try \"")
+}
+
+fn claude_trust_prompt(output: &str) -> bool {
+    // Real claude 2.1.177 trust dialog (verified against the live TUI):
+    // "Quick safety check: Is this a project you created or one you trust?"
+    // with "1. Yes, I trust this folder". Older wording kept as a fallback.
+    let text = strip_ansi(output);
+    text.contains("I trust this folder")
+        || text.contains("Is this a project you created or one you trust")
+        || text.contains("Do you trust the files")
+        || (text.contains("trust") && text.contains("proceed"))
 }
 
 fn toml_key_escape(value: &str) -> String {

@@ -208,6 +208,13 @@ impl Repl {
 
         let detached_control_rx = crate::detached_control::spawn_from_env();
 
+        // Adopt the parent REPL's `rfc cd` scope when the daemon forwarded it
+        // (see `Repl::rfc_scope_env`). This must precede `tick`: the dispatch
+        // it drives seals the agent's `agent.spawn` genesis with `rfc_scope`'s
+        // rfc_id, which is what gives the operator (and the cross-session
+        // reconciler) the RFC grounding the parent had.
+        self.adopt_rfc_scope_from_env();
+
         // Single tick — same dispatch the interactive REPL would do.
         // Errors from the tick itself are surfaced as the function's
         // error; job-spawn failures land in Outcome::Error and render
@@ -329,6 +336,31 @@ impl Repl {
         // persisted per-event; the `Result` return type is kept for the
         // error paths above (`?`).
         std::process::exit(last_exit);
+    }
+
+    /// Re-enter the `rfc cd` scope the parent REPL forwarded through
+    /// `ORKIA_RFC_PROJECT` / `ORKIA_RFC_ID` (set by [`Repl::rfc_scope_env`] on
+    /// the daemon spawn path). Only the daemon sets these — a plain
+    /// `orkia -c` from a user shell leaves them unset, so this is a no-op
+    /// there. We trust the parent's validation (it confirmed the RFC on disk
+    /// via `rfc cd`) and skip if a scope is somehow already active.
+    fn adopt_rfc_scope_from_env(&mut self) {
+        if self.rfc_scope.is_some() {
+            return;
+        }
+        let (Ok(project), Ok(id)) = (
+            std::env::var("ORKIA_RFC_PROJECT"),
+            std::env::var("ORKIA_RFC_ID"),
+        ) else {
+            return;
+        };
+        if project.is_empty() || id.is_empty() {
+            return;
+        }
+        self.rfc_scope = Some(super::RfcScopeState {
+            project,
+            rfc_id: orkia_rfc_core::RfcId::new(id),
+        });
     }
 
     fn drain_detached_control(

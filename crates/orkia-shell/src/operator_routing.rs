@@ -5,6 +5,9 @@
 // Elastic License 2.0; see the top-level LICENSE file
 // for terms.
 
+//! Shell-operator routing. Here "operator" means the POSIX shell operators
+//! `|`, `&&`, `||`, `;` — NOT the agent drift-detection `operator` actor in
+//! `crate::operator`. Same word, unrelated subsystem.
 //!
 //! The classifier path is operator-blind: `|`, `&&`, `||`, `;` tokenize
 //! as ordinary arguments, so `ps | grep x` fed the pipe to `PsFlags`

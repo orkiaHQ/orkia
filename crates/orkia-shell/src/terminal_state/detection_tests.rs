@@ -15,15 +15,15 @@ mod detection_tests {
     use orkia_shell_types::JobId;
     use parking_lot::Mutex;
 
-    use super::super::detector::DetectionResult;
+    use super::super::prompt_detector::PromptReadiness;
     use super::super::vte_interceptor::VteSignals;
     use super::super::worker::{
         DetectorThreadCtx, HandleDetection, detector_loop, handle_detection,
     };
     use super::super::{DetectorEvent, PendingPromptQueue, PendingState};
 
-    fn det(idle_ms: u64) -> DetectionResult {
-        DetectionResult {
+    fn det(idle_ms: u64) -> PromptReadiness {
+        PromptReadiness {
             prompt_detected: true,
             confidence: 0.8,
             idle_duration: Duration::from_millis(idle_ms),

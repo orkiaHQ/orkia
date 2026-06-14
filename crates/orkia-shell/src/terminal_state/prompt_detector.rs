@@ -30,7 +30,7 @@ use std::time::Duration;
 use super::vte_interceptor::VteSignals;
 
 #[derive(Debug, Clone)]
-pub struct DetectionResult {
+pub struct PromptReadiness {
     pub prompt_detected: bool,
     pub confidence: f32,
     pub idle_duration: Duration,
@@ -40,9 +40,9 @@ const IDLE_THRESHOLD_STRONG: Duration = Duration::from_millis(800);
 const IDLE_THRESHOLD_DEFAULT: Duration = Duration::from_millis(1500);
 const CONFIDENCE_THRESHOLD: f32 = 0.55;
 
-pub fn detect(vte: &VteSignals, process_waiting: f32) -> DetectionResult {
+pub fn detect_prompt(vte: &VteSignals, process_waiting: f32) -> PromptReadiness {
     let idle = vte.idle_duration();
-    let no_detection = DetectionResult {
+    let no_detection = PromptReadiness {
         prompt_detected: false,
         confidence: 0.0,
         idle_duration: idle,
@@ -109,7 +109,7 @@ pub fn detect(vte: &VteSignals, process_waiting: f32) -> DetectionResult {
 
     let confidence = confidence.min(0.99);
 
-    DetectionResult {
+    PromptReadiness {
         prompt_detected: confidence >= CONFIDENCE_THRESHOLD,
         confidence,
         idle_duration: idle,
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn no_writes_means_no_prompt() {
         let s = signals_with_writes(0);
-        let r = detect(&s, 1.0);
+        let r = detect_prompt(&s, 1.0);
         assert!(!r.prompt_detected);
         assert_eq!(r.confidence, 0.0);
     }
@@ -138,7 +138,7 @@ mod tests {
     #[test]
     fn too_soon_after_write_is_not_a_prompt() {
         let s = signals_with_writes(10);
-        let r = detect(&s, 1.0);
+        let r = detect_prompt(&s, 1.0);
         assert!(!r.prompt_detected, "idle <800ms must not fire");
     }
 
@@ -147,8 +147,8 @@ mod tests {
         let mut s = signals_with_writes(10);
         // Backdate last_write so idle is ~900ms.
         s.last_write_at = std::time::Instant::now() - Duration::from_millis(900);
-        let strong = detect(&s, 1.0);
-        let weak = detect(&s, 0.6);
+        let strong = detect_prompt(&s, 1.0);
+        let weak = detect_prompt(&s, 0.6);
         assert!(
             strong.prompt_detected,
             "strong OS signal must fire at 900ms"
@@ -164,7 +164,7 @@ mod tests {
         let mut s = signals_with_writes(10);
         s.last_write_at = std::time::Instant::now() - Duration::from_secs(2);
         s.alt_screen = true;
-        let r = detect(&s, 0.0);
+        let r = detect_prompt(&s, 0.0);
         assert!(
             !r.prompt_detected,
             "alt-screen vim must not surface a prompt"
@@ -176,7 +176,7 @@ mod tests {
         let mut s = signals_with_writes(10);
         s.last_write_at = std::time::Instant::now() - Duration::from_secs(11);
         s.cursor_positioned_after_text = true;
-        let r = detect(&s, 1.0);
+        let r = detect_prompt(&s, 1.0);
         assert!(r.prompt_detected);
         assert!(
             r.confidence >= 0.75,
@@ -191,7 +191,7 @@ mod tests {
         s.last_write_at = std::time::Instant::now() - Duration::from_millis(1600);
         s.cursor_positioned_after_text = true;
         // No process_in_read signal.
-        let r = detect(&s, 0.4);
+        let r = detect_prompt(&s, 0.4);
         assert!(!r.prompt_detected, "cursor + idle alone is not enough");
     }
 
@@ -200,7 +200,7 @@ mod tests {
         // Integration-style: real sleep so last_write_at ages naturally.
         let s = signals_with_writes(1);
         sleep(Duration::from_millis(900));
-        let r = detect(&s, 1.0);
+        let r = detect_prompt(&s, 1.0);
         assert!(r.prompt_detected, "real idle + strong OS = detect");
     }
 }

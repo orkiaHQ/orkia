@@ -281,6 +281,7 @@ impl Repl {
             let mut req = orkia_shell_types::DetachedSpawnRequest::new(line);
             req.working_dir = self.agent_cwd().map(|d| d.display().to_string());
             req.agent_name = Some(agent_name.to_string());
+            req.extra_env = self.rfc_scope_env();
             return match spawner.spawn_detached(req) {
                 Ok(daemon_id) => Outcome::JobSpawned {
                     job_id: JobId(daemon_id),
@@ -345,21 +346,24 @@ impl Repl {
         }
     }
 
-    /// Stamp the per-job project/RFC into [`Self::reasoning_scopes`] so the
-    /// hot-path consumer attributes this job's turns correctly. No-op when
-    /// reasoning isn't booted or there is
-    /// nothing to attribute. The project name resolves to a UUID via the team
-    /// cache (team/cloud users only — `None` for OSS, which is normal). The RFC
-    /// comes from the active `rfc cd` scope. `project_override` lets the RFC
-    /// delegate path pass the RFC's own project explicitly.
+    /// Stamp the per-job project/RFC into [`Self::reasoning_scopes`] so two
+    /// consumers attribute this job correctly: the reasoning hot-path consumer
+    /// (team/cloud) AND the operator fanout, which reads the same map to stamp
+    /// `rfc_id` onto every hook event it grounds (`spawn_fanout` → `scope_for`).
+    /// That second reader is why we do NOT gate on `intelligence`: an OSS user
+    /// with an active `rfc cd` scope has no reasoning engine but still needs the
+    /// operator to ground the agent (without this the agent's `hook.PreToolUse`
+    /// seals carry no rfc_id → "no rfc_id" drift and no cross-session join).
+    /// Still a no-op when there is nothing to attribute (no project, no RFC).
+    /// The project name resolves to a UUID via the team cache (team/cloud only —
+    /// `None` for OSS, which is normal). The RFC comes from the active `rfc cd`
+    /// scope. `project_override` lets the RFC delegate path pass the RFC's own
+    /// project explicitly.
     pub(crate) async fn record_reasoning_scope(
         &self,
         job_id: JobId,
         project_override: Option<&str>,
     ) {
-        if self.intelligence.is_none() {
-            return; // nothing reads the map
-        }
         let project_name = project_override
             .map(str::to_string)
             .or_else(|| self.rfc_scope.as_ref().map(|s| s.project.clone()));
@@ -383,6 +387,28 @@ impl Repl {
                 },
             );
         }
+    }
+
+    /// Encode the active `rfc cd` scope as env vars for a daemon-owned spawn.
+    /// A bare `@agent` dispatched under an `rfc cd` scope is daemon-owned
+    /// (Phase 4): the daemon re-parses the forwarded line in a fresh runtime
+    /// that holds no scope of its own. Without carrying the scope across, that
+    /// runtime stamps no rfc_id onto the agent's `agent.spawn` genesis nor any
+    /// `hook.PreToolUse` it seals — so the operator cannot ground the agent
+    /// ("no rfc_id" drift) and the cross-session reconciler has no watch_paths
+    /// to join against. The detached runtime adopts these back into `rfc_scope`
+    /// via [`Repl::adopt_rfc_scope_from_env`] before it dispatches. Empty when
+    /// no scope is active — a plain `orkia -c` from a user shell is unaffected.
+    pub(crate) fn rfc_scope_env(&self) -> Vec<(String, String)> {
+        self.rfc_scope
+            .as_ref()
+            .map(|s| {
+                vec![
+                    ("ORKIA_RFC_PROJECT".to_string(), s.project.clone()),
+                    ("ORKIA_RFC_ID".to_string(), s.rfc_id.as_str().to_string()),
+                ]
+            })
+            .unwrap_or_default()
     }
 
     /// `scope=public` project, publish the routing decision + the job. No-op
@@ -448,6 +474,7 @@ impl Repl {
             let mut req = orkia_shell_types::DetachedSpawnRequest::new(line);
             req.working_dir = self.agent_cwd().map(|d| d.display().to_string());
             req.agent_name = Some(agent.to_string());
+            req.extra_env = self.rfc_scope_env();
             return match spawner.spawn_detached(req) {
                 Ok(daemon_id) => Outcome::JobSpawned {
                     job_id: JobId(daemon_id),

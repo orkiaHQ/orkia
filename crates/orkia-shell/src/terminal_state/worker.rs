@@ -14,9 +14,9 @@ use orkia_shell_types::JobId;
 use parking_lot::Mutex;
 
 use super::classifier::classify;
-use super::detector::{DetectionResult, detect};
 use super::pending_prompt::{PendingPromptQueue, PendingState};
 use super::process_state;
+use super::prompt_detector::{PromptReadiness, detect_prompt};
 use super::vte_interceptor::{VteInterceptor, VteSignals};
 use super::{DetectorEvent, JobAttention, PromptType, TICK_INTERVAL};
 
@@ -180,7 +180,7 @@ fn on_recv_timeout(c: TimeoutCtx<'_>) -> LoopAction {
         return LoopAction::Continue;
     }
     let process_waiting = process_state::is_waiting_for_input_cached(c.pid, c.cached_leaf);
-    let det = detect(c.signals, process_waiting);
+    let det = detect_prompt(c.signals, process_waiting);
     tracing::trace!(
         job = c.job_id.0,
         idle_ms = det.idle_duration.as_millis(),
@@ -224,7 +224,7 @@ fn on_recv_timeout(c: TimeoutCtx<'_>) -> LoopAction {
 fn try_force_inject(
     job_id: JobId,
     agent_name: &str,
-    det: &DetectionResult,
+    det: &PromptReadiness,
     pending: &Arc<Mutex<PendingPromptQueue>>,
     event_tx: &mpsc::Sender<DetectorEvent>,
     already_notified: &mut bool,
@@ -305,7 +305,7 @@ pub(super) struct HandleDetection<'a> {
     pub agent_name: &'a str,
     pub job_id: JobId,
     pub signals: &'a VteSignals,
-    pub det: DetectionResult,
+    pub det: PromptReadiness,
     pub pending: &'a Arc<Mutex<PendingPromptQueue>>,
     pub event_tx: &'a mpsc::Sender<DetectorEvent>,
     pub already_notified: &'a mut bool,
@@ -428,7 +428,7 @@ fn log_detection(
     prompt_type: &PromptType,
     signals: &VteSignals,
     p: &PendingPromptQueue,
-    det: &DetectionResult,
+    det: &PromptReadiness,
     is_muted: bool,
 ) {
     // Decision context for live debugging (angle A): one line per detection
@@ -445,7 +445,7 @@ struct HoldCtx<'a> {
     p: &'a mut PendingPromptQueue,
     job_id: JobId,
     prompt_type: &'a PromptType,
-    det: &'a DetectionResult,
+    det: &'a PromptReadiness,
     agent_name: &'a str,
     last_line: &'a str,
     already_notified: &'a mut bool,
@@ -487,7 +487,7 @@ enum DeliverOutcome {
 fn deliver_or_hold(
     p: &mut PendingPromptQueue,
     job_id: JobId,
-    det: &DetectionResult,
+    det: &PromptReadiness,
 ) -> DeliverOutcome {
     match p.state(job_id) {
         Some(PendingState::WaitingForBoot) => p.on_agent_ready(job_id),
@@ -515,7 +515,7 @@ struct MaybeAttentionCtx<'a> {
     p: &'a PendingPromptQueue,
     job_id: JobId,
     prompt_type: &'a PromptType,
-    det: &'a DetectionResult,
+    det: &'a PromptReadiness,
     agent_name: &'a str,
     last_line: &'a str,
     already_notified: &'a mut bool,
@@ -543,7 +543,7 @@ struct BuildAttention<'a> {
     p: &'a PendingPromptQueue,
     job_id: JobId,
     prompt_type: &'a PromptType,
-    det: &'a DetectionResult,
+    det: &'a PromptReadiness,
     agent_name: &'a str,
     last_line: &'a str,
 }

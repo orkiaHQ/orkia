@@ -20,9 +20,9 @@
 //! The engine, the agent PTY, and every other agent continue to work.
 
 mod classifier;
-mod detector;
 mod pending_prompt;
 mod process_state;
+mod prompt_detector;
 mod vte_interceptor;
 mod worker;
 

@@ -10,18 +10,25 @@ use super::*;
 impl Repl {
     pub(crate) async fn handle_operator(&mut self, args: &[String]) -> Outcome {
         let sub = args.first().map(String::as_str).unwrap_or("status");
+        let data_dir = &self.config.data_dir;
         let blocks = match sub {
-            "status" => operator_status(&self.journal_store),
-            "events" => operator_events(&self.journal_store, args.get(1..).unwrap_or_default()),
-            "suggestions" => {
-                operator_suggestions(&self.journal_store, args.get(1..).unwrap_or_default())
-            }
+            "status" => operator_status(&self.journal_store, data_dir),
+            "events" => operator_events(
+                &self.journal_store,
+                data_dir,
+                args.get(1..).unwrap_or_default(),
+            ),
+            "suggestions" => operator_suggestions(
+                &self.journal_store,
+                data_dir,
+                args.get(1..).unwrap_or_default(),
+            ),
             "watch" => operator_watch(&self.config.data_dir),
             "explain" => {
                 let Some(id) = args.get(1) else {
                     return Outcome::Error("operator explain: missing event id".into());
                 };
-                operator_explain(&self.journal_store, id)
+                operator_explain(&self.journal_store, data_dir, id)
             }
             "open" | "source" => operator_open(
                 &self.config.data_dir,
@@ -229,8 +236,8 @@ fn final_response_text(event: &orkia_shell_types::FinalResponseEvent) -> Option<
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
-fn operator_status(store: &JournalStore) -> Vec<BlockContent> {
-    let events = operator_envelopes(store);
+fn operator_status(store: &JournalStore, data_dir: &Path) -> Vec<BlockContent> {
+    let events = operator_envelopes(store, data_dir);
     let drift = events
         .iter()
         .filter(|e| e.event.as_deref() == Some("operator.drift_detected"))
@@ -275,9 +282,9 @@ fn operator_status(store: &JournalStore) -> Vec<BlockContent> {
     blocks
 }
 
-fn operator_events(store: &JournalStore, args: &[String]) -> Vec<BlockContent> {
+fn operator_events(store: &JournalStore, data_dir: &Path, args: &[String]) -> Vec<BlockContent> {
     let last = parse_last(args).unwrap_or(20);
-    let events = operator_envelopes(store);
+    let events = operator_envelopes(store, data_dir);
     let skip = events.len().saturating_sub(last);
     let mut blocks = vec![BlockContent::SystemInfo(format!(
         " operator events (last {last})"
@@ -291,9 +298,13 @@ fn operator_events(store: &JournalStore, args: &[String]) -> Vec<BlockContent> {
     blocks
 }
 
-fn operator_suggestions(store: &JournalStore, args: &[String]) -> Vec<BlockContent> {
+fn operator_suggestions(
+    store: &JournalStore,
+    data_dir: &Path,
+    args: &[String],
+) -> Vec<BlockContent> {
     let last = parse_last(args).unwrap_or(20);
-    let events: Vec<_> = operator_envelopes(store)
+    let events: Vec<_> = operator_envelopes(store, data_dir)
         .into_iter()
         .filter(|e| e.event.as_deref() == Some("operator.suggestion_created"))
         .collect();
@@ -310,13 +321,13 @@ fn operator_suggestions(store: &JournalStore, args: &[String]) -> Vec<BlockConte
     blocks
 }
 
-fn operator_explain(store: &JournalStore, id: &str) -> Vec<BlockContent> {
+fn operator_explain(store: &JournalStore, data_dir: &Path, id: &str) -> Vec<BlockContent> {
     let Some(index) = parse_event_index(id) else {
         return vec![BlockContent::Error(format!(
             "operator explain: invalid id `{id}` (expected op-N or N)"
         ))];
     };
-    let events = operator_envelopes(store);
+    let events = operator_envelopes(store, data_dir);
     let Some(env) = events.get(index.saturating_sub(1)) else {
         return vec![BlockContent::Error(format!(
             "operator explain: no event `{id}`"
@@ -438,13 +449,125 @@ fn default_projection_agent(agents: &[AgentInfo]) -> Option<String> {
         .map(|agent| agent.name.clone())
 }
 
-fn operator_envelopes(store: &JournalStore) -> Vec<&JournalEnvelope> {
+/// Every operator verdict the REPL itself emitted, plus those of
+/// daemon-owned jobs. A REPL-owned job's verdicts reach `journal_store`
+/// (via `journal_tx`); a daemon-owned job's verdicts are emitted by the
+/// daemon's own operator and persist **only** in the per-job SEAL chain,
+/// never crossing into this process. Folding the chains back in is what
+/// lets `operator status`/`events`/`suggestions` surface daemon-owned
+/// drift identically to in-REPL drift — the same bridge `ps`/`wait`/`kill`
+/// use for daemon-owned jobs. Fail-soft: a missing or broken chain
+/// contributes nothing.
+fn operator_envelopes(store: &JournalStore, data_dir: &Path) -> Vec<JournalEnvelope> {
     let filter = crate::journal::JournalFilter {
         event_type: Some(EventType::Hook),
         source: Some("orkia-operator".into()),
         ..Default::default()
     };
-    store.query(&filter)
+    let mut merged: Vec<JournalEnvelope> = store.query(&filter).into_iter().cloned().collect();
+    merged.extend(seal_chain_operator_events(data_dir));
+    // Cross-session conflicts have no single-session vantage point (each
+    // daemon-owned agent runs its own per-job operator), so they are derived
+    // here by reconciling all per-job SEAL chains against each other — the same
+    // `cross_session_hits` jointure the live operator runs, fed durable
+    // evidence instead of a live stream.
+    merged.extend(crate::operator_reconcile::reconcile_cross_session(data_dir));
+    dedup_and_sort_operator_events(&mut merged);
+    merged
+}
+
+/// Project the `operator.*` records out of every job SEAL chain into
+/// journal envelopes the operator builtins already know how to render.
+fn seal_chain_operator_events(data_dir: &Path) -> Vec<JournalEnvelope> {
+    let mut out = Vec::new();
+    for chain in crate::seal::audit::list_job_chains(data_dir) {
+        let path = data_dir
+            .join("agents")
+            .join(&chain.agent)
+            .join("jobs")
+            .join(chain.job_id.to_string())
+            .join("seal.jsonl");
+        let Ok(loaded) = crate::seal::SealChain::load(path) else {
+            continue;
+        };
+        for record in loaded.records() {
+            if !record.event_type.starts_with("operator.") {
+                continue;
+            }
+            out.push(operator_envelope_from_seal(&chain.agent, record));
+        }
+    }
+    out
+}
+
+/// A SEAL record carries the verdict under `detail`; the operator builtins
+/// read the flat envelope fields plus `extra`, so lift the detail keys into
+/// the shape `format_operator_row`/`operator_status` expect.
+fn operator_envelope_from_seal(
+    agent: &str,
+    record: &orkia_shell_types::SealRecord,
+) -> JournalEnvelope {
+    let detail = &record.detail;
+    let mut env = JournalEnvelope::now(EventType::Hook);
+    env.timestamp = record.timestamp.clone();
+    env.source = Some("orkia-operator".into());
+    env.event = Some(record.event_type.clone());
+    env.job_id = detail
+        .get("job_id")
+        .and_then(serde_json::Value::as_u64)
+        .map(|n| n as u32);
+    env.agent = detail
+        .get("agent")
+        .and_then(serde_json::Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .or_else(|| Some(agent.to_string()));
+    // The router sink carries the verdict under `reason`; the journal sink
+    // serialises the whole envelope, where the same text lives under
+    // `message`. Accept either so both daemon copies render the reason.
+    env.message = detail
+        .get("reason")
+        .or_else(|| detail.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_string);
+    for key in [
+        "kind",
+        "severity",
+        "confidence",
+        "recommended_action",
+        "observed_action",
+        "source_refs",
+        "rfc_id",
+    ] {
+        if let Some(value) = detail.get(key) {
+            env.extra.insert(key.to_string(), value.clone());
+        }
+    }
+    env
+}
+
+/// Collapse duplicate verdicts, then order by time so `last` is meaningful.
+/// One verdict can appear several times: a REPL-owned job's verdict is in
+/// both `journal_store` and its SEAL chain, and the daemon SEALs each verdict
+/// twice (once per emission sink). They share a stable identity — event kind,
+/// job, drift kind, and the observed action — so key on that, not on the
+/// reason text (which one sink omits).
+fn dedup_and_sort_operator_events(events: &mut Vec<JournalEnvelope>) {
+    let mut seen = std::collections::HashSet::new();
+    events.retain(|env| {
+        let key = format!(
+            "{}|{}|{}|{}",
+            env.event.as_deref().unwrap_or(""),
+            env.job_id.map(|n| n.to_string()).unwrap_or_default(),
+            env.extra.get("kind").and_then(|v| v.as_str()).unwrap_or(""),
+            env.extra
+                .get("observed_action")
+                .map(serde_json::Value::to_string)
+                .unwrap_or_default(),
+        );
+        seen.insert(key)
+    });
+    events.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 }
 
 fn format_operator_row(index: usize, env: &JournalEnvelope) -> String {
@@ -534,7 +657,7 @@ mod tests {
         store.append(&operator_event("operator.projection_rejected"));
         store.append(&operator_event("operator.suggestion_created"));
 
-        let text = operator_status(&store)
+        let text = operator_status(&store, dir.path())
             .into_iter()
             .map(|block| format!("{block:?}"))
             .collect::<Vec<_>>()
@@ -574,5 +697,85 @@ mod tests {
         env.event = Some(event.into());
         env.message = Some("test".into());
         env
+    }
+
+    fn seal_drift(job: u32, reason: &str, target: &str) -> orkia_shell_types::SealRecord {
+        orkia_shell_types::SealRecord {
+            seq: 1,
+            timestamp: "2026-06-13T16:56:11+00:00".into(),
+            event_type: "operator.drift_detected".into(),
+            detail: serde_json::json!({
+                "agent": "faye",
+                "job_id": job,
+                "kind": "hard_violation",
+                "severity": "warning",
+                "reason": reason,
+                "recommended_action": "attach_rfc_scope",
+                "observed_action": {"tool": "Write", "target": target},
+            }),
+            hash: String::new(),
+            prev_hash: String::new(),
+            rfc_id: None,
+        }
+    }
+
+    #[test]
+    fn seal_record_projects_into_operator_envelope() {
+        let env = operator_envelope_from_seal("faye", &seal_drift(1, "no rfc_id", "note.txt"));
+        assert_eq!(env.source.as_deref(), Some("orkia-operator"));
+        assert_eq!(env.event.as_deref(), Some("operator.drift_detected"));
+        assert_eq!(env.job_id, Some(1));
+        assert_eq!(env.agent.as_deref(), Some("faye"));
+        assert_eq!(env.message.as_deref(), Some("no rfc_id"));
+        assert_eq!(
+            env.extra.get("severity").and_then(|v| v.as_str()),
+            Some("warning")
+        );
+        // Rendered the same way as a journal-sourced verdict.
+        let row = format_operator_row(1, &env);
+        assert!(row.contains("operator.drift_detected"), "{row}");
+        assert!(row.contains("job=1"), "{row}");
+    }
+
+    #[test]
+    fn dedup_collapses_full_and_thin_daemon_copies() {
+        // The daemon SEALs each verdict twice: once with `reason` (router
+        // sink) and once where the reason lives under `message` (journal
+        // sink). Both must collapse to a single rendered row.
+        let full = operator_envelope_from_seal("faye", &seal_drift(1, "no rfc_id", "note.txt"));
+        let thin = {
+            let mut r = seal_drift(1, "no rfc_id", "note.txt");
+            // Re-shape detail into the journal-projected form: reason→message.
+            r.detail = serde_json::json!({
+                "agent": "faye",
+                "job_id": 1,
+                "kind": "hard_violation",
+                "severity": "warning",
+                "message": "no rfc_id",
+                "recommended_action": "attach_rfc_scope",
+                "observed_action": {"tool": "Write", "target": "note.txt"},
+            });
+            operator_envelope_from_seal("faye", &r)
+        };
+        assert_eq!(
+            thin.message.as_deref(),
+            Some("no rfc_id"),
+            "message fallback"
+        );
+        let mut events = vec![full, thin];
+        dedup_and_sort_operator_events(&mut events);
+        assert_eq!(events.len(), 1, "full and thin copies did not collapse");
+    }
+
+    #[test]
+    fn dedup_collapses_the_same_verdict_from_store_and_chain() {
+        // Same job + event + reason + observed action seen twice (REPL journal
+        // copy and SEAL-chain copy) must collapse to one row.
+        let from_store = operator_envelope_from_seal("faye", &seal_drift(1, "no rfc_id", "a.txt"));
+        let from_chain = operator_envelope_from_seal("faye", &seal_drift(1, "no rfc_id", "a.txt"));
+        let other = operator_envelope_from_seal("sage", &seal_drift(2, "no rfc_id", "b.txt"));
+        let mut events = vec![from_store, from_chain, other];
+        dedup_and_sort_operator_events(&mut events);
+        assert_eq!(events.len(), 2, "duplicate verdict was not collapsed");
     }
 }

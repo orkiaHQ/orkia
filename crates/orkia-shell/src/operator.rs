@@ -8,6 +8,11 @@
 //! Orkia Sys operator: notify-only drift detection over the structured agent
 //! event stream. The actor owns its session graph and emits SEAL records through
 //! `EventRouter`; it never reads PTY screen bytes and never blocks the REPL.
+//!
+//! Naming note: this "operator" is the **agent action drift detector**. It is
+//! unrelated to two same-named neighbours: `operator_routing` (shell
+//! `| && || ;` operators) and `terminal_state::prompt_detector` (prompt
+//! readiness scoring). Different domains, same English word.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -45,13 +50,25 @@ struct OperatorGraph {
     sessions: HashMap<JobId, SessionState>,
 }
 
-#[derive(Default)]
-struct SessionState {
-    agent: String,
-    rfc_id: Option<RfcId>,
-    constraints: Option<OperatorConstraints>,
-    touched: Vec<String>,
+#[derive(Default, Clone)]
+pub(crate) struct SessionState {
+    pub(crate) agent: String,
+    pub(crate) rfc_id: Option<RfcId>,
+    pub(crate) constraints: Option<OperatorConstraints>,
+    pub(crate) touched: Vec<String>,
     missing_scope_reported: bool,
+}
+
+impl SessionState {
+    /// Build an empty session pinned to an agent name. Used by the durable
+    /// SEAL-chain reconciler, which lives outside this module and so cannot
+    /// reach the private `missing_scope_reported` field via a struct literal.
+    pub(crate) fn for_agent(agent: String) -> Self {
+        Self {
+            agent,
+            ..Default::default()
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -327,60 +344,33 @@ impl OperatorSupervisor {
     }
 
     fn cross_session_verdicts(&self, event: &OrkiaEvent, tool: &str, target: &str) -> Vec<Verdict> {
-        if target.is_empty() || !is_write_tool(tool) {
-            return Vec::new();
-        }
-        self.graph
-            .sessions
-            .iter()
-            .filter(|(job, _)| **job != event.job_id)
-            .filter_map(|(job, state)| {
-                let constraints = state.constraints.as_ref()?;
-                let watched = constraints
-                    .watch_paths
-                    .iter()
-                    .any(|p| pattern_match(p, target));
-                let exact_prior_touch = state.touched.iter().any(|p| p == target);
-                let contract_area = is_contract_path(target)
-                    && constraints
-                        .allowed_paths
-                        .iter()
-                        .any(|p| pattern_match(p, target));
-                let reason = if watched {
-                    Some("watch_paths")
-                } else if exact_prior_touch {
-                    Some("same artifact touched by another session")
-                } else if contract_area {
-                    Some("contract-like path overlaps another RFC scope")
-                } else {
-                    None
-                }?;
-                Some({
-                    self.verdict(
-                        event,
-                        VerdictDraft {
-                            event_type: "operator.cross_session_conflict",
-                            kind: "cross_session_conflict",
-                            severity: "warning",
-                            confidence: 1.0,
-                            reason: format!(
-                                "write target '{target}' intersects {reason} for job {} ({})",
-                                job.0, state.agent
-                            ),
-                            recommended_action: "notify_affected_session",
-                            observed_action: serde_json::json!({
-                                "tool": tool,
-                                "target": target,
-                                "affected_job_id": job.0,
-                                "affected_agent": state.agent,
-                                "affected_rfc_id": state.rfc_id.as_ref().map(|r| r.as_str()),
-                            }),
-                            source_refs: Vec::new(),
-                        },
-                    )
-                })
-            })
-            .collect()
+        // The detection itself lives in `operator_reconcile` so the live actor
+        // and the durable SEAL-chain reconciler share ONE code path (the
+        // `cross_session_hits` jointure). This wrapper only dresses each hit as
+        // a live `Verdict` for the router/journal sinks.
+        crate::operator_reconcile::cross_session_hits(
+            &self.graph.sessions,
+            event.job_id,
+            tool,
+            target,
+        )
+        .into_iter()
+        .map(|hit| {
+            self.verdict(
+                event,
+                VerdictDraft {
+                    event_type: "operator.cross_session_conflict",
+                    kind: "cross_session_conflict",
+                    severity: "warning",
+                    confidence: 1.0,
+                    reason: hit.reason(target),
+                    recommended_action: "notify_affected_session",
+                    observed_action: hit.observed_action(tool, target),
+                    source_refs: Vec::new(),
+                },
+            )
+        })
+        .collect()
     }
 
     fn semantic_verdict(
@@ -529,7 +519,7 @@ impl OperatorSupervisor {
     }
 }
 
-fn is_write_tool(tool: &str) -> bool {
+pub(crate) fn is_write_tool(tool: &str) -> bool {
     matches!(
         tool.to_ascii_lowercase().as_str(),
         "write"
@@ -553,7 +543,7 @@ fn is_permission_like(tool: &str) -> bool {
     )
 }
 
-fn is_contract_path(path: &str) -> bool {
+pub(crate) fn is_contract_path(path: &str) -> bool {
     let lower = path.to_ascii_lowercase();
     ["contract", "schema", "protocol", "api", "migration"]
         .iter()
@@ -678,7 +668,7 @@ fn risk_rank(risk: &str) -> u8 {
     }
 }
 
-fn pattern_match(pattern: &str, value: &str) -> bool {
+pub(crate) fn pattern_match(pattern: &str, value: &str) -> bool {
     let pattern = pattern.trim();
     if pattern.is_empty() {
         return false;

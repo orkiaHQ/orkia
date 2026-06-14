@@ -40,6 +40,7 @@ pub mod native;
 pub mod operator;
 mod operator_context;
 pub mod operator_projection;
+mod operator_reconcile;
 pub mod operator_routing;
 pub mod operator_sources;
 #[cfg(test)]
