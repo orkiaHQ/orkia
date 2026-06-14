@@ -1,0 +1,22 @@
+[package]
+name = "orkia-dispatch-proxy"
+version = "0.1.0"
+edition.workspace = true
+license = "Elastic-2.0"
+description = "OSS RFC-dispatch coordinator: drives an RFC's [dispatch] DAG by asking orkia-kernel to authorize/advance while fanning each task out as a detached agent job and fanning final responses back in"
+
+[dependencies]
+orkia-rfc-core = { workspace = true }
+orkia-shell-types = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

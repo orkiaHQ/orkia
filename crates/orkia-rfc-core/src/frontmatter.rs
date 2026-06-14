@@ -62,6 +62,13 @@ pub struct RfcFrontmatter {
     /// enforced until written here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator: Option<OperatorFrontmatterBlock>,
+    /// `[dispatch]` block (`SPEC-ORKIA-RFC-DISPATCH`). Declares the
+    /// RFC → many-agents DAG. Authored in `DraftActive`, locked at
+    /// promotion. Purely declarative: this crate carries the plan, the
+    /// OSS proxy resolves each `task.agent → command`, and the premium
+    /// brain owns all structural validation. `None` means no dispatch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dispatch: Option<DispatchFrontmatterBlock>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -82,6 +89,54 @@ pub struct OperatorConstraints {
     pub risk_ceiling: Option<String>,
     #[serde(default)]
     pub watch_paths: Vec<String>,
+}
+
+/// Mirror of the `[dispatch]` table inside an RFC's TOML frontmatter
+/// (`SPEC-ORKIA-RFC-DISPATCH`). Sibling of [`ForgeFrontmatterBlock`]: this
+/// crate carries the declarative plan verbatim and validates nothing —
+/// structural validation (cycle, dangling dep, duplicate id, `max_inflight`)
+/// is the premium brain's job at authorize time. The string fields are kept
+/// raw (not enums) so an unknown `strategy`/`on_task_fail` is refused once,
+/// in the brain, rather than producing a frontmatter parse error here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DispatchFrontmatterBlock {
+    /// `dag` | `parallel` | `sequential` (the latter two desugar to a DAG).
+    #[serde(default = "dispatch_default_strategy")]
+    pub strategy: String,
+    /// Backpressure: max tasks spawned concurrently. Defaults to `0` when
+    /// absent so the brain refuses it (`max_inflight < 1`) with a clear
+    /// message, rather than this field being silently optional.
+    #[serde(default)]
+    pub max_inflight: usize,
+    /// V1 supports `decision-log` only. Carried for the command surface
+    /// (aggregation, step 7); the brain ignores it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregation: Option<String>,
+    /// `pause` (default, fail-closed — dependents blocked) | `abort`.
+    #[serde(default = "dispatch_default_on_fail")]
+    pub on_task_fail: String,
+    /// The DAG nodes, authored as `[[dispatch.task]]` array-of-tables.
+    #[serde(default, rename = "task")]
+    pub tasks: Vec<DispatchTaskBlock>,
+}
+
+/// One `[[dispatch.task]]` entry. Declarative only — no `command`/`args`/
+/// `provider`: the OSS proxy resolves those from `agent` before authorize.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DispatchTaskBlock {
+    pub id: String,
+    pub agent: String,
+    pub body: String,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+}
+
+fn dispatch_default_strategy() -> String {
+    "dag".into()
+}
+
+fn dispatch_default_on_fail() -> String {
+    "pause".into()
 }
 
 /// Mirror of the `[forge]` table inside an RFC's TOML frontmatter. This
@@ -231,6 +286,7 @@ mod tests {
             forge: None,
             scope: None,
             operator: None,
+            dispatch: None,
         }
     }
 
@@ -327,6 +383,102 @@ notification = false\n\
         let (fm, _) = parse_frontmatter(src).expect("parse");
         assert!(fm.kind.is_none());
         assert!(fm.forge.is_none());
+    }
+
+    #[test]
+    fn parse_dispatch_block_diamond() {
+        let src = "+++\n\
+id = \"ship-x\"\n\
+state = \"draft-active\"\n\
+version = 2\n\
+created_at = \"2026-05-22T14:00:00+00:00\"\n\
+updated_at = \"2026-05-22T14:00:00+00:00\"\n\
+content_hash = \"sha256:0\"\n\
+\n\
+[dispatch]\n\
+strategy = \"dag\"\n\
+max_inflight = 4\n\
+aggregation = \"decision-log\"\n\
+on_task_fail = \"pause\"\n\
+\n\
+[[dispatch.task]]\n\
+id = \"t-api\"\n\
+agent = \"faye\"\n\
+body = \"Design the API.\"\n\
+depends_on = []\n\
+\n\
+[[dispatch.task]]\n\
+id = \"t-impl\"\n\
+agent = \"sage\"\n\
+body = \"Implement against the API.\"\n\
+depends_on = [\"t-api\"]\n\
++++\nbody\n";
+        let (fm, _) = parse_frontmatter(src).expect("parse");
+        let d = fm.dispatch.expect("dispatch block");
+        assert_eq!(d.strategy, "dag");
+        assert_eq!(d.max_inflight, 4);
+        assert_eq!(d.aggregation.as_deref(), Some("decision-log"));
+        assert_eq!(d.on_task_fail, "pause");
+        assert_eq!(d.tasks.len(), 2);
+        assert_eq!(d.tasks[0].id, "t-api");
+        assert!(d.tasks[0].depends_on.is_empty());
+        assert_eq!(d.tasks[1].depends_on, vec!["t-api"]);
+    }
+
+    #[test]
+    fn dispatch_defaults_fail_closed() {
+        // Only the task list is given; strategy/on_task_fail default to the
+        // general/fail-closed forms and `max_inflight` defaults to 0 so the
+        // brain refuses it rather than this parsing silently.
+        let src = "+++\n\
+id = \"x\"\n\
+state = \"draft-active\"\n\
+version = 1\n\
+created_at = \"2026-05-22T14:00:00+00:00\"\n\
+updated_at = \"2026-05-22T14:00:00+00:00\"\n\
+content_hash = \"sha256:0\"\n\
+\n\
+[dispatch]\n\
+\n\
+[[dispatch.task]]\n\
+id = \"t-only\"\n\
+agent = \"faye\"\n\
+body = \"Do the thing.\"\n\
++++\nbody\n";
+        let (fm, _) = parse_frontmatter(src).expect("parse");
+        let d = fm.dispatch.expect("dispatch block");
+        assert_eq!(d.strategy, "dag");
+        assert_eq!(d.on_task_fail, "pause");
+        assert_eq!(d.max_inflight, 0);
+        assert!(d.aggregation.is_none());
+        assert!(d.tasks[0].depends_on.is_empty());
+    }
+
+    #[test]
+    fn dispatch_block_round_trips() {
+        let mut fm = fixture();
+        fm.dispatch = Some(DispatchFrontmatterBlock {
+            strategy: "sequential".into(),
+            max_inflight: 2,
+            aggregation: None,
+            on_task_fail: "abort".into(),
+            tasks: vec![DispatchTaskBlock {
+                id: "t-1".into(),
+                agent: "faye".into(),
+                body: "go".into(),
+                depends_on: vec![],
+            }],
+        });
+        let rendered = render_frontmatter(&fm, "body\n").expect("render");
+        let (parsed, _) = parse_frontmatter(&rendered).expect("parse");
+        assert_eq!(parsed.dispatch, fm.dispatch);
+    }
+
+    #[test]
+    fn legacy_rfc_without_dispatch_still_parses() {
+        let src = "+++\nid = \"x\"\nstate = \"draft-active\"\nversion = 2\ncreated_at = \"2026-05-22T14:00:00+00:00\"\nupdated_at = \"2026-05-22T14:00:00+00:00\"\ncontent_hash = \"sha256:0\"\n+++\nbody\n";
+        let (fm, _) = parse_frontmatter(src).expect("parse");
+        assert!(fm.dispatch.is_none());
     }
 
     #[test]

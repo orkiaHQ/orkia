@@ -229,6 +229,7 @@ mod tests {
                 forge: None,
                 scope: None,
                 operator: None,
+                dispatch: None,
             },
             body: body.to_string(),
         }

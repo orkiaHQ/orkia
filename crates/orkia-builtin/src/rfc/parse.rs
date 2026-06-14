@@ -252,6 +252,36 @@ pub fn parse(args: &[String]) -> Result<RfcAction, String> {
                 confirmed: has_confirm_flag(&bools),
             })
         }
+        "dispatch" => {
+            let slug = positional.first().cloned().ok_or_else(|| {
+                "usage: orkia rfc dispatch <slug> [--project <name>] [--resume]".to_string()
+            })?;
+            Ok(RfcAction::Dispatch {
+                slug,
+                project: flags.get("project").cloned(),
+                resume: bools.contains(&"resume".to_string()),
+            })
+        }
+        "dispatch-task" => {
+            let rfc_id = positional.first().cloned().ok_or_else(|| {
+                "usage: orkia rfc dispatch-task <rfc-id> --task <id> --agent <name> [--project <name>]"
+                    .to_string()
+            })?;
+            let task = flags
+                .get("task")
+                .cloned()
+                .ok_or_else(|| "rfc dispatch-task: --task <id> required".to_string())?;
+            let agent = flags
+                .get("agent")
+                .cloned()
+                .ok_or_else(|| "rfc dispatch-task: --agent <name> required".to_string())?;
+            Ok(RfcAction::DispatchTask {
+                rfc_id,
+                project: flags.get("project").cloned(),
+                task,
+                agent,
+            })
+        }
         other => Err(format!("unknown rfc subcommand: {other}")),
     }
 }

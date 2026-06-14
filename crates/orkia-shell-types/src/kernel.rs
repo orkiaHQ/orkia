@@ -26,6 +26,10 @@ use crate::forge_kernel::{
     ForgeBuildRequest, ForgeBuildResponse, ForgeUsageRequest, ForgeUsageResponse,
 };
 use crate::native::{NativeCompletionRequest, NativeCompletionResponse};
+use crate::dispatch_kernel::{
+    DispatchAbortRequest, DispatchAbortResponse, DispatchAdvanceRequest, DispatchAdvanceResponse,
+    DispatchAuthorizeRequest, DispatchAuthorizeResponse,
+};
 use crate::pipeline_kernel::{
     PipelineAbortRequest, PipelineAbortResponse, PipelineAdvanceRequest, PipelineAdvanceResponse,
     PipelineAuthorizeRequest, PipelineAuthorizeResponse,
@@ -268,6 +272,44 @@ pub trait KernelRpc: Send + Sync + 'static {
         let _ = req;
         Err(KernelRpcError::Unavailable(
             "pipeline_abort not implemented by this client".into(),
+        ))
+    }
+
+    /// RFC dispatch (`SPEC-ORKIA-RFC-DISPATCH`): ask the kernel to validate
+    /// a declarative DAG of pre-resolved tasks and open a run. The kernel
+    /// holds the run state and returns the first wave of ready task plans
+    /// (or a refusal). Default Unavailable so stub clients keep compiling.
+    fn dispatch_authorize(
+        &self,
+        req: DispatchAuthorizeRequest,
+    ) -> Result<DispatchAuthorizeResponse, KernelRpcError> {
+        let _ = req;
+        Err(KernelRpcError::Unavailable(
+            "dispatch_authorize not implemented by this client".into(),
+        ))
+    }
+
+    /// RFC dispatch: report one task's outcome (by file ref) and ask the
+    /// kernel for the next wave of ready tasks or a terminal verdict.
+    fn dispatch_advance(
+        &self,
+        req: DispatchAdvanceRequest,
+    ) -> Result<DispatchAdvanceResponse, KernelRpcError> {
+        let _ = req;
+        Err(KernelRpcError::Unavailable(
+            "dispatch_advance not implemented by this client".into(),
+        ))
+    }
+
+    /// RFC dispatch: tell the kernel a run was cancelled so it drops the
+    /// in-memory run state (idempotent).
+    fn dispatch_abort(
+        &self,
+        req: DispatchAbortRequest,
+    ) -> Result<DispatchAbortResponse, KernelRpcError> {
+        let _ = req;
+        Err(KernelRpcError::Unavailable(
+            "dispatch_abort not implemented by this client".into(),
         ))
     }
 

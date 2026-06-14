@@ -153,6 +153,7 @@ mod tests {
                 forge,
                 scope: None,
                 operator: None,
+                dispatch: None,
             },
             body: String::new(),
         }

@@ -24,6 +24,7 @@ orkia-final-response = { workspace = true }
 orkia-stage-exec = { workspace = true }
 orkia-mcp-pipe-server = { workspace = true }
 orkia-pipeline-proxy = { workspace = true }
+orkia-dispatch-proxy = { workspace = true }
 orkia-forge-proxy = { workspace = true }
 orkia-seal-proxy = { workspace = true }
 tokio = { workspace = true }

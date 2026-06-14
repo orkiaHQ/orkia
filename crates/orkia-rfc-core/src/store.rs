@@ -167,6 +167,7 @@ impl RfcStore {
             forge: None,
             scope: None,
             operator: None,
+            dispatch: None,
         };
         self.write_atomic(id, &fm, &body)?;
         Ok(RfcRecord { fm, body })
@@ -338,6 +339,9 @@ impl RfcStore {
             forge: current.fm.forge.clone(),
             scope: current.fm.scope,
             operator: current.fm.operator.clone(),
+            // A reopened version re-authors its own plan; carrying a spent
+            // dispatch forward could re-trigger it. Fail-safe: drop it.
+            dispatch: None,
         };
         // Commit point: the atomic rename of the v+1 RFC. Everything above is
         // durable and non-destructive, so a crash before here leaves version n

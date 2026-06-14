@@ -15,6 +15,7 @@ members = [
     "crates/orkia-stage-exec",        # generic interactive PTY stage executor (single-shell pipeline)
     "crates/orkia-mcp-pipe-server",   # MCP stdio server (submit_pipeline_output) — `orkia mcp-pipe` safety net
     "crates/orkia-pipeline-proxy",    # OSS @a|@b coordinator: kernel authorize/advance + PTY stage exec
+    "crates/orkia-dispatch-proxy",    # OSS RFC→many-agents coordinator: kernel dispatch.* + detached fan-out + run-ledger
     "crates/orkia-forge-proxy",       # OSS ForgeBuilder: kernel-relayed Forge build + local materialize
     "crates/orkia-seal-proxy",        # OSS RfcSealAssembler: kernel-relayed SEAL v1 assembly
     "crates/orkia-builtin",           # builtins: ps, seal, route, attach, approve, etc.
@@ -169,6 +170,7 @@ orkia-journal-hub = { path = "crates/orkia-journal-hub" }
 orkia-stage-exec = { path = "crates/orkia-stage-exec" }
 orkia-mcp-pipe-server = { path = "crates/orkia-mcp-pipe-server" }
 orkia-pipeline-proxy = { path = "crates/orkia-pipeline-proxy" }
+orkia-dispatch-proxy = { path = "crates/orkia-dispatch-proxy" }
 orkia-forge-proxy = { path = "crates/orkia-forge-proxy" }
 orkia-seal-proxy = { path = "crates/orkia-seal-proxy" }
 orkia-builtin = { path = "crates/orkia-builtin" }

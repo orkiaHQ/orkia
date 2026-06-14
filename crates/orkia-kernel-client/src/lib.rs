@@ -29,14 +29,16 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use orkia_shell_types::dispatch_kernel;
 use orkia_shell_types::{
-    AssembleRequest, ForgeBuildRequest, ForgeBuildResponse, ForgeUsageRequest, ForgeUsageResponse,
-    IntentGuess, KernelBenchmarkOutcome, KernelCancelOutcome, KernelContributeOutcome,
-    KernelContributeStatus, KernelEvictOutcome, KernelModelStatus, KernelPullOutcome, KernelRpc,
-    KernelRpcError, KernelVersion, METHOD_ABORT, METHOD_ADVANCE, METHOD_AUTHORIZE,
-    METHOD_FORGE_BUILD, METHOD_FORGE_USAGE, METHOD_LLM_COMPLETE, METHOD_SEAL_ASSEMBLE,
-    METHOD_SEAL_VERIFY, NativeCompletionRequest, NativeCompletionResponse, PipelineAbortRequest,
-    PipelineAbortResponse, PipelineAdvanceRequest, PipelineAdvanceResponse,
+    AssembleRequest, DispatchAbortRequest, DispatchAbortResponse, DispatchAdvanceRequest,
+    DispatchAdvanceResponse, DispatchAuthorizeRequest, DispatchAuthorizeResponse, ForgeBuildRequest,
+    ForgeBuildResponse, ForgeUsageRequest, ForgeUsageResponse, IntentGuess, KernelBenchmarkOutcome,
+    KernelCancelOutcome, KernelContributeOutcome, KernelContributeStatus, KernelEvictOutcome,
+    KernelModelStatus, KernelPullOutcome, KernelRpc, KernelRpcError, KernelVersion, METHOD_ABORT,
+    METHOD_ADVANCE, METHOD_AUTHORIZE, METHOD_FORGE_BUILD, METHOD_FORGE_USAGE, METHOD_LLM_COMPLETE,
+    METHOD_SEAL_ASSEMBLE, METHOD_SEAL_VERIFY, NativeCompletionRequest, NativeCompletionResponse,
+    PipelineAbortRequest, PipelineAbortResponse, PipelineAdvanceRequest, PipelineAdvanceResponse,
     PipelineAuthorizeRequest, PipelineAuthorizeResponse, SealAssembleResponse, SealVerifyRequest,
     SealVerifyResponse,
 };
@@ -270,6 +272,27 @@ impl KernelRpc for UnixKernelClient {
         req: PipelineAbortRequest,
     ) -> Result<PipelineAbortResponse, KernelRpcError> {
         self.pipeline_call(METHOD_ABORT, &req)
+    }
+
+    fn dispatch_authorize(
+        &self,
+        req: DispatchAuthorizeRequest,
+    ) -> Result<DispatchAuthorizeResponse, KernelRpcError> {
+        self.pipeline_call(dispatch_kernel::METHOD_AUTHORIZE, &req)
+    }
+
+    fn dispatch_advance(
+        &self,
+        req: DispatchAdvanceRequest,
+    ) -> Result<DispatchAdvanceResponse, KernelRpcError> {
+        self.pipeline_call(dispatch_kernel::METHOD_ADVANCE, &req)
+    }
+
+    fn dispatch_abort(
+        &self,
+        req: DispatchAbortRequest,
+    ) -> Result<DispatchAbortResponse, KernelRpcError> {
+        self.pipeline_call(dispatch_kernel::METHOD_ABORT, &req)
     }
 
     fn forge_build(&self, req: ForgeBuildRequest) -> Result<ForgeBuildResponse, KernelRpcError> {

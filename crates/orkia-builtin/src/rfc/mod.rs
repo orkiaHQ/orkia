@@ -89,6 +89,71 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_parses_slug_project_and_resume() {
+        match parse(&args(&["dispatch", "auth-pkce"])).expect("parse") {
+            RfcAction::Dispatch {
+                slug,
+                project,
+                resume,
+            } => {
+                assert_eq!(slug, "auth-pkce");
+                assert_eq!(project, None);
+                assert!(!resume);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+        match parse(&args(&[
+            "dispatch",
+            "auth-pkce",
+            "--project",
+            "demo",
+            "--resume",
+        ]))
+        .expect("parse")
+        {
+            RfcAction::Dispatch {
+                project, resume, ..
+            } => {
+                assert_eq!(project.as_deref(), Some("demo"));
+                assert!(resume);
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dispatch_without_slug_errors() {
+        assert!(parse(&args(&["dispatch"])).is_err());
+    }
+
+    #[test]
+    fn dispatch_task_requires_task_and_agent() {
+        assert!(parse(&args(&["dispatch-task", "RFC-001", "--task", "t-a"])).is_err());
+        match parse(&args(&[
+            "dispatch-task",
+            "RFC-001",
+            "--task",
+            "t-a",
+            "--agent",
+            "faye",
+        ]))
+        .expect("parse")
+        {
+            RfcAction::DispatchTask {
+                rfc_id,
+                task,
+                agent,
+                ..
+            } => {
+                assert_eq!(rfc_id, "RFC-001");
+                assert_eq!(task, "t-a");
+                assert_eq!(agent, "faye");
+            }
+            other => panic!("wrong variant: {other:?}"),
+        }
+    }
+
+    #[test]
     fn resolve_parses_decision_id_and_answer() {
         let action = parse(&args(&["resolve", "d-001", "--answer", "both"])).expect("parse");
         match action {

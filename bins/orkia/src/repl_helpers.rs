@@ -129,6 +129,18 @@ pub(crate) fn build_repl<R: ShellRenderer>(renderer: R, w: ReplWiring) -> Repl {
     // daemon (the agent survives REPL exit). A detached runtime gets `None` (the
     // recursion guard) and hosts the agent in-process — it is the daemon's host.
     let detached_spawner = crate::pty_daemon::detached_spawner::provider(&w.config);
+    // RFC→many-agents dispatch coordinator. Reuses the pipeline bundle's
+    // final-response source (the same Stop-hook capture stream — one owner)
+    // plus the detached spawner and daemon-jobs seams. Same Team + kernel gate
+    // as @a|@b; absent any seam the slot stays empty and `rfc dispatch` is
+    // Team-gated. Built before `w.config`/`w.resolver` move into `Repl::new`.
+    let dispatch_proxy = crate::dispatch_wiring::build(crate::dispatch_wiring::DispatchWiring {
+        config: &w.config,
+        resolver: &w.resolver,
+        source: pipeline.as_ref().map(|p| p.source.clone()),
+        spawner: detached_spawner.clone(),
+        daemon_jobs: daemon_jobs.clone(),
+    });
     let repl = Repl::new(renderer, w.classifier, HeuristicRouter, w.config)
         .with_login_shell(w.login)
         .with_capabilities(w.resolver, w.handle)
@@ -164,6 +176,10 @@ pub(crate) fn build_repl<R: ShellRenderer>(renderer: R, w: ReplWiring) -> Repl {
             // it into the hub ingress so AFR envelopes reach the bus (and
             // a detached runtime's AFR forwarder) like the default FRS's.
             .with_final_response_ingress(p.frs_rx),
+        None => repl,
+    };
+    let repl = match dispatch_proxy {
+        Some(proxy) => repl.with_dispatch_proxy(proxy),
         None => repl,
     };
     let mut repl = match w.tui_factory {

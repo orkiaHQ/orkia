@@ -29,6 +29,7 @@ mod auth_cli;
 mod bridge;
 mod daemon_cli;
 mod dash_c;
+mod dispatch_wiring;
 mod forge_wiring;
 mod journal_cli;
 mod mcp_bridge;

@@ -278,6 +278,7 @@ mod tests {
                 }),
                 scope: None,
                 operator: None,
+                dispatch: None,
             },
             body: "# Hello\n".into(),
         }
