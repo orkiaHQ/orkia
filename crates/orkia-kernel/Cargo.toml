@@ -24,6 +24,7 @@ tracing.workspace = true
 tokio.workspace = true
 sha2.workspace = true
 orkia-auth.workspace = true
+orkia-capabilities.workspace = true
 orkia-kernel-client.workspace = true
 orkia-shell-types.workspace = true
 orkia-reasoning-core.workspace = true

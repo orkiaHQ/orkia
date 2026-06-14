@@ -5605,6 +5605,7 @@ dependencies = [
  "axum",
  "chrono",
  "orkia-auth",
+ "orkia-capabilities",
  "orkia-kernel-client",
  "orkia-reasoning-client",
  "orkia-reasoning-core",

@@ -47,7 +47,7 @@ fn premium_session() -> SessionInfo {
     SessionInfo {
         display_name: "k".into(),
         email: "k@x.io".into(),
-        plan: "starter".into(),
+        plan: "solo-pro".into(),
         issued_at: Utc::now(),
         expires_at: None,
         account_id: Some(Uuid::from_u128(ACC).to_string()),

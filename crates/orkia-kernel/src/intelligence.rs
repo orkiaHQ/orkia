@@ -356,7 +356,7 @@ mod tests {
 
     #[tokio::test]
     async fn premium_boots_and_shuts_down() {
-        let auth = Arc::new(StubAuth(Some(session("starter"))));
+        let auth = Arc::new(StubAuth(Some(session("solo-pro"))));
         let mut intel = Intelligence::new(auth, None);
         let tmp = tempfile::tempdir().unwrap();
         let (cfg, _tx) = boot_cfg(tmp.path());
@@ -386,7 +386,7 @@ mod tests {
         assert!(!out.contains("Knowledge Protocol"));
 
         // Gate open (premium boot): the L2a block is appended.
-        let auth = Arc::new(StubAuth(Some(session("starter"))));
+        let auth = Arc::new(StubAuth(Some(session("solo-pro"))));
         let mut intel = Intelligence::new(auth, None);
         let tmp = tempfile::tempdir().unwrap();
         let (cfg, _tx) = boot_cfg(tmp.path());

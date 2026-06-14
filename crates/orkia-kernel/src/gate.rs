@@ -8,14 +8,8 @@
 use std::sync::Arc;
 
 use orkia_auth::AuthProvider;
+use orkia_capabilities::Plan;
 use uuid::Uuid;
-
-/// The set of plan slugs that unlock Orkia Intelligence. These mirror the
-/// backend `BillingPlan` enum (`free`/`starter`/`team`/`org`) — every non-free
-/// plan is premium. Anything not in this set — including the empty string,
-/// `"free"`, or an unrecognized value — is treated as non-premium (fail-closed,
-/// CLAUDE.md #8).
-const PREMIUM_PLANS: &[&str] = &["starter", "team", "org"];
 
 /// Reads the auth session and decides whether intelligence is enabled.
 #[derive(Clone)]
@@ -78,10 +72,14 @@ pub struct Identity {
     pub account_id: Uuid,
 }
 
-/// Premium check, isolated for testing. Case-insensitive on the slug.
+/// Premium check, isolated for testing. Any non-free plan unlocks Orkia
+/// Intelligence. Delegates to [`orkia_capabilities::Plan`] — the single
+/// source of truth for the plan slugs the backend actually issues
+/// (`solo-pro`/`team`/`enterprise`), so this gate can never drift from the
+/// wire contract. Unknown/empty slugs parse to `Plan::Free` → non-premium
+/// (fail-closed, CLAUDE.md #8).
 pub(crate) fn is_premium(plan: &str) -> bool {
-    let p = plan.trim().to_ascii_lowercase();
-    PREMIUM_PLANS.contains(&p.as_str())
+    Plan::parse(plan) != Plan::Free
 }
 
 #[cfg(test)]
@@ -152,8 +150,28 @@ mod tests {
 
     #[test]
     fn premium_plans_open_the_gate() {
-        for p in ["starter", "Team", "ORG", " starter "] {
+        // The slugs the backend ACTUALLY issues in the JWT `plan` claim
+        // (`orkia-storage::service::plan::billing_plan_to_shell`):
+        // Starter → "solo-pro", Team → "team", Org → "enterprise".
+        // Case/whitespace/`ent`-alias tolerant via `Plan::parse`.
+        for p in ["solo-pro", "Team", "ENTERPRISE", " solo-pro ", "ent"] {
             assert!(gate_with(Some(p)).is_enabled(), "plan {p:?} should enable");
+        }
+    }
+
+    /// Regression: the raw `BillingPlan` enum names (`starter`/`org`) are
+    /// NOT what the backend serialises into the JWT — it sends the shell
+    /// slugs `solo-pro`/`enterprise`. The gate must key on the wire slugs,
+    /// not the DB enum names, or real paying Starter/Org users get
+    /// intelligence silently disabled. (Found via the live compose backend.)
+    #[test]
+    fn db_enum_names_do_not_open_the_gate() {
+        for dead in ["starter", "org"] {
+            assert_eq!(
+                gate_with(Some(dead)).state(),
+                GateState::FreePlan,
+                "{dead:?} is a DB enum name the backend never emits — must not unlock"
+            );
         }
     }
 
@@ -162,7 +180,7 @@ mod tests {
         let ws = "00000000-0000-0000-0000-0000000000aa";
         let acc = "00000000-0000-0000-0000-0000000000bb";
         let gate = Gate::new(Arc::new(StubAuth(Mutex::new(Some(session_with_identity(
-            "starter", ws, acc,
+            "solo-pro", ws, acc,
         ))))));
         let id = gate.identity().expect("identity present");
         assert_eq!(id.workspace_id, Uuid::parse_str(ws).unwrap());
@@ -179,10 +197,10 @@ mod tests {
         ))))));
         assert!(g_free.identity().is_none());
         // Premium but no ids → none.
-        assert!(gate_with(Some("starter")).identity().is_none());
+        assert!(gate_with(Some("solo-pro")).identity().is_none());
         // Premium but malformed ids → fail-closed.
         let g_bad = Gate::new(Arc::new(StubAuth(Mutex::new(Some(session_with_identity(
-            "starter",
+            "solo-pro",
             "not-a-uuid",
             "also-bad",
         ))))));
