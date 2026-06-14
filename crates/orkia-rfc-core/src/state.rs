@@ -64,8 +64,11 @@ pub struct TransitionCtx {
     pub open_clarifications: u32,
     /// Logged design decisions that have not been reviewed yet.
     pub unreviewed_decisions: u32,
-    /// Whether dispatch (if any) is complete. V1 has no dispatch, so the
-    /// caller passes `true` unconditionally; V2 will gate on this.
+    /// Whether dispatch (if any) is complete. An RFC with no `[dispatch]`
+    /// block has nothing to wait on, so the caller passes `true`; with a
+    /// block, the caller computes `ledger ∋ RunCompleted` (the OSS proxy's
+    /// run-ledger) and passes that. `Active → Complete` is blocked while a
+    /// run is live (`SPEC-ORKIA-RFC-DISPATCH`).
     pub dispatch_done: bool,
 }
 

@@ -29,7 +29,10 @@ pub mod store;
 
 pub use decision::{DecisionId, DecisionKind, DecisionRecord, DecisionStatus};
 pub use error::RfcError;
-pub use frontmatter::{RfcFrontmatter, parse_frontmatter, render_frontmatter};
+pub use frontmatter::{
+    DispatchFrontmatterBlock, DispatchTaskBlock, RfcFrontmatter, parse_frontmatter,
+    render_frontmatter,
+};
 pub use hash::{ContentHash, content_hash_of};
 pub use id::{AgentId, RfcId, SectionPath};
 pub use matrix::{RfcTool, tool_allowed};

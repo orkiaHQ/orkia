@@ -120,6 +120,8 @@ impl Repl {
             auth_provider: None,
             stream_handle: None,
             forge_builder: None,
+            dispatch_proxy: None,
+            dispatch_runs: Vec::new(),
             seal_assembler: None,
             team_client: team_client.clone(),
             team_cache: std::sync::Arc::new(crate::team_cache::TeamCache::new(
@@ -170,6 +172,18 @@ impl Repl {
     /// proprietary distribution.
     pub fn with_forge_builder(mut self, forge: std::sync::Arc<dyn ForgeBuilder>) -> Self {
         self.forge_builder = Some(forge);
+        self
+    }
+
+    /// Inject the OSS RFC→many-agents dispatch coordinator that powers
+    /// `orkia rfc dispatch`. Left unset in Solo builds (the command then
+    /// surfaces a Team-required block). The binary builds it over the
+    /// kernel client, the agent resolver, and the detached-spawn seams.
+    pub fn with_dispatch_proxy(
+        mut self,
+        proxy: std::sync::Arc<orkia_dispatch_proxy::KernelDispatchProxy>,
+    ) -> Self {
+        self.dispatch_proxy = Some(proxy);
         self
     }
 

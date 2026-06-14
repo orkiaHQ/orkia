@@ -5387,6 +5387,7 @@ dependencies = [
  "orkia-auth",
  "orkia-builtin",
  "orkia-capabilities",
+ "orkia-dispatch-proxy",
  "orkia-final-response",
  "orkia-forge-proxy",
  "orkia-kernel-client",
@@ -5415,6 +5416,24 @@ dependencies = [
 [[package]]
 name = "orkia-difficulty-scorer"
 version = "0.1.0"
+
+[[package]]
+name = "orkia-dispatch-proxy"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hex",
+ "orkia-rfc-core",
+ "orkia-shell-types",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "toml 1.1.2+spec-1.1.0",
+ "tracing",
+]
 
 [[package]]
 name = "orkia-e2e-harness"
@@ -5938,6 +5957,7 @@ dependencies = [
  "orkia-auth",
  "orkia-builtin",
  "orkia-capabilities",
+ "orkia-dispatch-proxy",
  "orkia-final-response",
  "orkia-forge-build",
  "orkia-journal-hub",

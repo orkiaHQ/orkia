@@ -148,6 +148,23 @@ pub enum RfcAction {
         /// confirmation in that case.
         confirmed: bool,
     },
+    /// Dispatch an RFC to many agents via the declarative DAG in its
+    /// `[dispatch]` frontmatter. Team-gated. `--resume` reconciles an
+    /// existing run after a restart instead of starting fresh.
+    Dispatch {
+        slug: String,
+        project: Option<String>,
+        resume: bool,
+    },
+    /// Re-run a single dispatch task: re-inject the composed prompt stored
+    /// at `<rfc_dir>/issues/<task>.md` into a freshly-spawned agent. Used by
+    /// the proxy's fan-in to retry a failed leaf without restarting the run.
+    DispatchTask {
+        rfc_id: String,
+        project: Option<String>,
+        task: String,
+        agent: String,
+    },
 }
 
 impl std::fmt::Debug for RfcAction {
@@ -174,6 +191,8 @@ impl std::fmt::Debug for RfcAction {
             Self::Ask { .. } => write!(f, "Ask"),
             Self::Resolve { .. } => write!(f, "Resolve"),
             Self::Forge { .. } => write!(f, "Forge"),
+            Self::Dispatch { .. } => write!(f, "Dispatch"),
+            Self::DispatchTask { .. } => write!(f, "DispatchTask"),
             Self::Seal { .. } => write!(f, "Seal"),
             Self::SealExportKey { .. } => write!(f, "SealExportKey"),
             Self::SealImportKey { .. } => write!(f, "SealImportKey"),

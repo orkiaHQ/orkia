@@ -348,6 +348,16 @@ pub struct Repl {
     /// proprietary distribution injects a remote `ForgeBuilder`.
     /// Calls are gated on `Capability::ForgeBuild`.
     forge_builder: Option<std::sync::Arc<dyn ForgeBuilder>>,
+    /// OSS RFC→many-agents dispatch coordinator. `None` in Solo builds,
+    /// where `orkia rfc dispatch` surfaces a Team-required block. When
+    /// `Some`, `handle_rfc_dispatch` resolves agents, authorizes the DAG
+    /// with the kernel, and drives the run on its own thread. Injected by
+    /// the binary via `with_dispatch_proxy`.
+    dispatch_proxy: Option<std::sync::Arc<orkia_dispatch_proxy::KernelDispatchProxy>>,
+    /// Live dispatch run handles, kept so a run isn't dropped (and can be
+    /// aborted) while its actor thread drives it. Pushed by
+    /// `handle_rfc_dispatch`; never read back in V1.
+    dispatch_runs: Vec<orkia_dispatch_proxy::RunHandle>,
     /// OSS builds — the assembler's runtime sub-workspace lives outside
     /// the public tree, so the proprietary distribution injects the
     /// concrete implementation via `with_seal_assembler`.
@@ -505,6 +515,8 @@ mod native_dispatch;
 mod operator_capture;
 mod prompt;
 mod rfc;
+mod rfc_dispatch;
+mod rfc_doc;
 mod rfc_ops;
 mod startup;
 mod state_machine;

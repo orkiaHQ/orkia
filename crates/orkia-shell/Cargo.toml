@@ -23,6 +23,7 @@ orkia-knowledge-mcp = { workspace = true }
 orkia-kernel-client = { workspace = true }
 orkia-kernel-installer = { workspace = true }
 orkia-forge-build = { workspace = true }
+orkia-dispatch-proxy = { workspace = true }
 async-trait = { workspace = true }
 orkia-rfc-core = { workspace = true }
 orkia-rfc-state = { workspace = true }

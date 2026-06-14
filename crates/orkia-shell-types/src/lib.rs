@@ -33,6 +33,7 @@ pub mod forge_kernel;
 pub mod history;
 pub mod input_limits;
 pub mod job;
+pub mod dispatch_kernel;
 pub mod job_config;
 pub mod journal;
 pub mod kernel;
@@ -66,6 +67,13 @@ pub use classifier::{IntentClassifier, IntentGuess};
 pub use decision::{
     ApprovalStatus, BlockContent, CellStyle, Decision, Mode, NoOpReason, Outcome, PipelineStage,
     StyledCell,
+};
+// `METHOD_*` stay on the `dispatch_kernel::` path — re-exporting them here
+// would collide with the identically named pipeline_kernel constants.
+pub use dispatch_kernel::{
+    DispatchAbortRequest, DispatchAbortResponse, DispatchAdvanceRequest, DispatchAdvanceResponse,
+    DispatchAuthorizeRequest, DispatchAuthorizeResponse, DispatchTaskRequest, TaskOutcome,
+    TaskOutputRef, TaskPlan,
 };
 pub use error::ShellError;
 pub use exec::{

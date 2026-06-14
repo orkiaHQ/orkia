@@ -45,6 +45,25 @@ pub enum DecisionKind {
     ClarificationResolved,
     DesignProposed,
     DesignReviewed,
+    /// One dispatch task's final-response, recorded against the RFC
+    /// (`SPEC-ORKIA-RFC-DISPATCH` §6). Used as the `kind` tag of a dispatch
+    /// SEAL-chain record; the chain is the tamper-evident audit anchor the
+    /// task's issue file points into (issues stay the source of truth).
+    DispatchOutput,
+}
+
+impl DecisionKind {
+    /// The snake_case wire tag (matches the `Serialize` rename), so a single
+    /// definition feeds both serialization and the dispatch SEAL chain.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Clarification => "clarification",
+            Self::ClarificationResolved => "clarification_resolved",
+            Self::DesignProposed => "design_proposed",
+            Self::DesignReviewed => "design_reviewed",
+            Self::DispatchOutput => "dispatch_output",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
