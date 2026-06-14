@@ -82,6 +82,13 @@ pub struct OperatorConstraints {
     pub risk_ceiling: Option<String>,
     #[serde(default)]
     pub watch_paths: Vec<String>,
+    /// Frozen contract surface: the cross-session interfaces (schemas, API
+    /// boundaries, migrations, protocols) that two agents must never edit
+    /// concurrently. A declared, authoritative superset of the
+    /// `is_contract_path` heuristic — an overlap here is the highest-severity
+    /// cross-session signal (`contract_freeze`), stronger than `watch_paths`.
+    #[serde(default)]
+    pub contract_paths: Vec<String>,
 }
 
 /// Mirror of the `[forge]` table inside an RFC's TOML frontmatter. This
@@ -263,6 +270,7 @@ forbidden_paths = [\"orkia-private/**\"]\n\
 forbidden_commands = [\"git push*\"]\n\
 risk_ceiling = \"high\"\n\
 watch_paths = [\"orkia/crates/orkia-shell/**\"]\n\
+contract_paths = [\"orkia/crates/orkia-shell-types/src/seal.rs\"]\n\
 +++\n\
 body\n";
         let (fm, _) = parse_frontmatter(src).expect("parse");
@@ -272,6 +280,10 @@ body\n";
             .expect("operator constraints");
         assert_eq!(constraints.allowed_paths, vec!["orkia/**"]);
         assert_eq!(constraints.risk_ceiling.as_deref(), Some("high"));
+        assert_eq!(
+            constraints.contract_paths,
+            vec!["orkia/crates/orkia-shell-types/src/seal.rs"]
+        );
     }
 
     #[test]

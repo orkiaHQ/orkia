@@ -709,6 +709,7 @@ fn write_operator_rfc(data_dir: &std::path::Path) {
             forbidden_commands: Vec::new(),
             risk_ceiling: Some("high".into()),
             watch_paths: Vec::new(),
+            contract_paths: Vec::new(),
         }),
     });
     store

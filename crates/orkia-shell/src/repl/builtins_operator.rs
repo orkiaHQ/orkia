@@ -361,6 +361,10 @@ fn operator_explain(store: &JournalStore, data_dir: &Path, id: &str) -> Vec<Bloc
         "rfc_id",
         "recommended_action",
         "observed_action",
+        // Attribution artifact: the first-class contract dimension and the
+        // tamper-evident SEAL anchor pinning this verdict to sealed evidence.
+        "contract_surface",
+        "evidence",
         "source_refs",
         "question",
         "rejection_reason",
@@ -587,7 +591,15 @@ fn format_operator_row(index: usize, env: &JournalEnvelope) -> String {
         .get("rfc_id")
         .and_then(|v| v.as_str())
         .unwrap_or("-");
-    format!("  op-{index} {event} severity={severity} job={job} rfc={rfc} {reason}")
+    // Surface the first-class contract dimension at a glance: a conflict on the
+    // frozen contract surface is the highest-gravity cross-session signal.
+    let contract = env
+        .extra
+        .get("contract_surface")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let tag = if contract { " [contract]" } else { "" };
+    format!("  op-{index} {event} severity={severity} job={job} rfc={rfc} {reason}{tag}")
 }
 
 fn parse_last(args: &[String]) -> Option<usize> {
@@ -735,6 +747,24 @@ mod tests {
         let row = format_operator_row(1, &env);
         assert!(row.contains("operator.drift_detected"), "{row}");
         assert!(row.contains("job=1"), "{row}");
+    }
+
+    #[test]
+    fn contract_surface_renders_tag_and_explain_surfaces_evidence() {
+        let mut env = operator_event("operator.cross_session_conflict");
+        env.job_id = Some(1);
+        env.extra
+            .insert("contract_surface".into(), serde_json::json!(true));
+        env.extra.insert(
+            "evidence".into(),
+            serde_json::json!({"seal_hash": "abc123", "seal_seq": 4}),
+        );
+        // The one-line events row flags the contract dimension at a glance.
+        let row = format_operator_row(1, &env);
+        assert!(row.contains("[contract]"), "{row}");
+        // A non-contract row carries no tag (no regression on the common path).
+        let plain = operator_event("operator.drift_detected");
+        assert!(!format_operator_row(1, &plain).contains("[contract]"));
     }
 
     #[test]

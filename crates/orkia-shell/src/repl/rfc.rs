@@ -206,6 +206,9 @@ impl Repl {
                     forbidden_commands,
                     risk_ceiling,
                     watch_paths,
+                    // Declared authoritatively in RFC frontmatter, not via this
+                    // accept path (see rfc_constraints.rs).
+                    contract_paths: Vec::new(),
                 },
             ),
             // Safety: inner is only called with the doc-family variants.

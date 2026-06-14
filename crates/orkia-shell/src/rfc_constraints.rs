@@ -62,6 +62,11 @@ pub(crate) fn propose(
             forbidden_commands: forbidden_commands(&combined),
             risk_ceiling: Some(risk_ceiling(&combined).to_string()),
             watch_paths: paths.into_iter().take(8).collect(),
+            // The frozen contract surface is declared authoritatively in the RFC
+            // frontmatter (`[operator.constraints].contract_paths`), read back by
+            // `operator_context::load_constraints`. The heuristic proposal does
+            // not seed it (a freeze is a deliberate human act, not a guess).
+            contract_paths: Vec::new(),
         },
         sources,
     }

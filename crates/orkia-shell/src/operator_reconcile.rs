@@ -40,6 +40,13 @@ pub(crate) struct CrossSessionHit {
     affected_job: JobId,
     affected_agent: String,
     affected_rfc: Option<RfcId>,
+    /// First-class attribution dimension: the overlap is on the **declared,
+    /// frozen contract surface** (`[operator.constraints].contract_paths`), not
+    /// merely a watched dir or a heuristic contract-like path. The highest
+    /// gravity cross-session signal — a concurrent edit to an interface two
+    /// sessions both depend on. Carried into `observed_action` so a compliance
+    /// reader can filter conflicts down to the contract-breaking subset.
+    contract: bool,
 }
 
 impl CrossSessionHit {
@@ -59,8 +66,29 @@ impl CrossSessionHit {
             "affected_job_id": self.affected_job.0,
             "affected_agent": self.affected_agent,
             "affected_rfc_id": self.affected_rfc.as_ref().map(RfcId::as_str),
+            "contract_surface": self.contract,
         })
     }
+}
+
+/// Tamper-evident anchor for an action: the actor's offending `hook.PreToolUse`
+/// SEAL record `hash` + `seq`. It pins a cross-session verdict to the exact
+/// sealed event that triggered it, so an auditor can re-verify the claim against
+/// the durable chain. Reconciler-only: the live path has no seal yet (the
+/// verdict is computed before the action is sealed), which is why the
+/// attribution artifact is a property of the **durable** evidence path.
+#[derive(Clone)]
+struct SealAnchor {
+    hash: String,
+    seq: u64,
+}
+
+/// A write action recovered from a SEAL chain, carrying its tamper-evident
+/// anchor so the reconciled verdict can name the precise sealed event.
+struct WriteAction {
+    tool: String,
+    target: String,
+    anchor: SealAnchor,
 }
 
 /// THE cross-session jointure: does this write target intersect any OTHER
@@ -80,6 +108,11 @@ pub(crate) fn cross_session_hits(
         .filter(|(job, _)| **job != actor_job)
         .filter_map(|(job, state)| {
             let constraints = state.constraints.as_ref()?;
+            // Declared frozen contract surface — authoritative, highest gravity.
+            let contract_freeze = constraints
+                .contract_paths
+                .iter()
+                .any(|p| pattern_match(p, target));
             let watched = constraints
                 .watch_paths
                 .iter()
@@ -90,7 +123,9 @@ pub(crate) fn cross_session_hits(
                     .allowed_paths
                     .iter()
                     .any(|p| pattern_match(p, target));
-            let reason_tag = if watched {
+            let reason_tag = if contract_freeze {
+                "contract_paths (frozen contract surface)"
+            } else if watched {
                 "watch_paths"
             } else if exact_prior_touch {
                 "same artifact touched by another session"
@@ -104,6 +139,7 @@ pub(crate) fn cross_session_hits(
                 affected_job: *job,
                 affected_agent: state.agent.clone(),
                 affected_rfc: state.rfc_id.clone(),
+                contract: contract_freeze,
             })
         })
         .collect();
@@ -120,7 +156,7 @@ pub(crate) fn cross_session_hits(
 /// collides across agents (see `build_recon_sessions`).
 struct ReconSession {
     state: SessionState,
-    writes: Vec<(String, String)>,
+    writes: Vec<WriteAction>,
     real_job: JobId,
 }
 
@@ -137,21 +173,20 @@ pub(crate) fn reconcile_cross_session(data_dir: &Path) -> Vec<JournalEnvelope> {
 
     let mut out = Vec::new();
     for (job, recon) in &sessions {
-        for (tool, target) in &recon.writes {
-            for mut hit in cross_session_hits(&states, *job, tool, target) {
+        for write in &recon.writes {
+            for mut hit in cross_session_hits(&states, *job, &write.tool, &write.target) {
                 // The jointure discriminates sessions by the synthetic map key;
                 // translate the affected session back to its real per-agent job
                 // id so the envelope and reason text carry the id the user sees.
                 if let Some(affected) = sessions.get(&hit.affected_job) {
                     hit.affected_job = affected.real_job;
                 }
-                out.push(cross_session_envelope(
-                    recon.real_job,
-                    &recon.state,
-                    tool,
-                    target,
-                    &hit,
-                ));
+                out.push(cross_session_envelope(&ConflictRecord {
+                    actor_job: recon.real_job,
+                    actor: &recon.state,
+                    write,
+                    hit: &hit,
+                }));
             }
         }
     }
@@ -200,7 +235,14 @@ fn build_recon_sessions(data_dir: &Path) -> HashMap<JobId, ReconSession> {
                 state.rfc_id = record.rfc_id.clone();
             }
             if is_write_tool(tool) {
-                writes.push((tool.to_string(), target.to_string()));
+                writes.push(WriteAction {
+                    tool: tool.to_string(),
+                    target: target.to_string(),
+                    anchor: SealAnchor {
+                        hash: record.hash.clone(),
+                        seq: record.seq,
+                    },
+                });
             }
         }
         if let Some(rfc) = &state.rfc_id {
@@ -219,23 +261,36 @@ fn build_recon_sessions(data_dir: &Path) -> HashMap<JobId, ReconSession> {
     map
 }
 
+/// Everything the envelope builder needs about one reconciled conflict: the
+/// actor session, its offending write (carrying the tamper-evident anchor), and
+/// the jointure hit. A context struct keeps the builder at one argument.
+struct ConflictRecord<'a> {
+    actor_job: JobId,
+    actor: &'a SessionState,
+    write: &'a WriteAction,
+    hit: &'a CrossSessionHit,
+}
+
 /// Project a hit into the same envelope shape the live operator's journal sink
 /// produces, so the operator builtins render reconciled conflicts identically.
-fn cross_session_envelope(
-    job: JobId,
-    state: &SessionState,
-    tool: &str,
-    target: &str,
-    hit: &CrossSessionHit,
-) -> JournalEnvelope {
+/// The reconciled path additionally carries the **attribution artifact**: the
+/// SEAL anchor of the offending write (`evidence`) and the `contract_surface`
+/// dimension, so a compliance reader can pin the verdict to sealed evidence.
+fn cross_session_envelope(record: &ConflictRecord) -> JournalEnvelope {
+    let ConflictRecord {
+        actor_job,
+        actor,
+        write,
+        hit,
+    } = record;
     let mut env = JournalEnvelope::now(EventType::Hook);
     env.source = Some("orkia-operator".into());
     env.event = Some("operator.cross_session_conflict".into());
-    env.job_id = Some(job.0);
-    if !state.agent.is_empty() {
-        env.agent = Some(state.agent.clone());
+    env.job_id = Some(actor_job.0);
+    if !actor.agent.is_empty() {
+        env.agent = Some(actor.agent.clone());
     }
-    env.message = Some(hit.reason(target));
+    env.message = Some(hit.reason(&write.target));
     env.extra.insert(
         "kind".into(),
         serde_json::Value::String("cross_session_conflict".into()),
@@ -250,11 +305,23 @@ fn cross_session_envelope(
         "recommended_action".into(),
         serde_json::Value::String("notify_affected_session".into()),
     );
-    env.extra
-        .insert("observed_action".into(), hit.observed_action(tool, target));
+    env.extra.insert(
+        "observed_action".into(),
+        hit.observed_action(&write.tool, &write.target),
+    );
     env.extra
         .insert("source_refs".into(), serde_json::Value::Array(Vec::new()));
-    if let Some(rfc) = &state.rfc_id {
+    // Attribution artifact: tamper-evident anchor + first-class contract flag.
+    env.extra.insert(
+        "evidence".into(),
+        serde_json::json!({
+            "seal_hash": write.anchor.hash,
+            "seal_seq": write.anchor.seq,
+        }),
+    );
+    env.extra
+        .insert("contract_surface".into(), serde_json::json!(hit.contract));
+    if let Some(rfc) = &actor.rfc_id {
         env.extra.insert(
             "rfc_id".into(),
             serde_json::Value::String(rfc.as_str().to_string()),
@@ -287,6 +354,13 @@ mod tests {
     fn watch(paths: &[&str]) -> OperatorConstraints {
         OperatorConstraints {
             watch_paths: paths.iter().map(|p| p.to_string()).collect(),
+            ..Default::default()
+        }
+    }
+
+    fn contract(paths: &[&str]) -> OperatorConstraints {
+        OperatorConstraints {
+            contract_paths: paths.iter().map(|p| p.to_string()).collect(),
             ..Default::default()
         }
     }
@@ -330,6 +404,74 @@ mod tests {
             hits[0]
                 .reason("src/api.rs")
                 .contains("same artifact touched by another session")
+        );
+    }
+
+    #[test]
+    fn frozen_contract_path_is_highest_gravity_and_first_class() {
+        // A session freezes the seal contract surface; another writes into it.
+        // contract_paths must win over watch_paths AND set the first-class
+        // `contract_surface` dimension on the verdict.
+        let mut sessions = HashMap::new();
+        let mut c = contract(&["crates/*/src/seal.rs"]);
+        // Also watched — proves contract_freeze takes precedence over watch.
+        c.watch_paths = vec!["crates/**".into()];
+        sessions.insert(JobId(2), session("sage", Some("frozen"), Some(c), &[]));
+        let hits = cross_session_hits(&sessions, JobId(1), "write_file", "crates/x/src/seal.rs");
+        assert_eq!(hits.len(), 1);
+        assert!(
+            hits[0].contract,
+            "frozen contract overlap must set contract"
+        );
+        assert!(
+            hits[0]
+                .reason("crates/x/src/seal.rs")
+                .contains("frozen contract surface"),
+            "{}",
+            hits[0].reason("crates/x/src/seal.rs")
+        );
+        assert_eq!(
+            hits[0].observed_action("write_file", "crates/x/src/seal.rs")["contract_surface"],
+            serde_json::json!(true)
+        );
+    }
+
+    #[test]
+    fn reconcile_carries_seal_evidence_and_contract_dimension() {
+        let dir = tempdir().expect("tmp");
+        write_rfc(dir.path(), "writer", OperatorConstraints::default());
+        write_rfc(dir.path(), "frozen", contract(&["src/contracts/*.rs"]));
+
+        let mut frozen = crate::seal::SealManager::new(dir.path().to_path_buf());
+        seal_pretool(&mut frozen, 2, "sage", "frozen", "read_file", "tests/x.rs");
+        let mut writer = crate::seal::SealManager::new(dir.path().to_path_buf());
+        seal_pretool(
+            &mut writer,
+            1,
+            "faye",
+            "writer",
+            "write_file",
+            "src/contracts/auth.rs",
+        );
+
+        let envelopes = reconcile_cross_session(dir.path());
+        assert_eq!(envelopes.len(), 1, "{envelopes:?}");
+        let env = &envelopes[0];
+        // Contract dimension surfaces as a first-class field.
+        assert_eq!(
+            env.extra.get("contract_surface"),
+            Some(&serde_json::json!(true))
+        );
+        // Evidence anchor pins the verdict to the offending sealed write.
+        let evidence = env.extra.get("evidence").expect("evidence anchor");
+        let hash = evidence
+            .get("seal_hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(!hash.is_empty(), "seal_hash must anchor the verdict");
+        assert!(
+            evidence.get("seal_seq").and_then(|v| v.as_u64()).is_some(),
+            "seal_seq must anchor the verdict"
         );
     }
 
