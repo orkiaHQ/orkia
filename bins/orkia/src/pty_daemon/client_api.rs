@@ -452,9 +452,21 @@ fn start_daemon_process() -> Result<(), String> {
             Ok(())
         });
     }
-    cmd.spawn()
-        .map(|_| ())
-        .map_err(|e| format!("spawn daemon: {e}"))
+    let child = cmd.spawn().map_err(|e| format!("spawn daemon: {e}"))?;
+    // A dropped `Child` is never `wait()`'d, so a daemon that later dies lingers
+    // as a zombie under this shell — and a zombie still answers `kill(pid, 0)`,
+    // which makes the lock holder look alive and blocks every later spawn. A
+    // detached reaper waits on it so the kernel reaps it the instant it exits.
+    // No unsafe fork, no zombie. The daemon still outlives us: if we exit first
+    // it is simply orphaned to init as before.
+    std::thread::Builder::new()
+        .name("daemon-reaper".into())
+        .spawn(move || {
+            let mut child = child;
+            let _ = child.wait();
+        })
+        .map_err(|e| format!("spawn daemon reaper: {e}"))?;
+    Ok(())
 }
 
 fn stopped_status(config: &ShellConfig) -> DaemonStatus {

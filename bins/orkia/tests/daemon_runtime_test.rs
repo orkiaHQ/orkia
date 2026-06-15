@@ -154,6 +154,51 @@ fn daemon_stop_command_removes_socket_and_lock() {
 }
 
 #[test]
+fn zombie_holder_lock_does_not_block_startup() {
+    let home = tempfile::tempdir().expect("temp home");
+    let orkia_dir = home.path().join(".orkia");
+    std::fs::create_dir_all(&orkia_dir).expect("create .orkia");
+    write_echo_agent_config(home.path(), &orkia_dir);
+    let _guard = DaemonGuard::new(home.path());
+
+    // A child we deliberately never reap becomes a zombie — globally visible as
+    // such to the daemon. A zombie still answers `kill(pid, 0)`, so without the
+    // zombie check the daemon would treat this lock as live and refuse to start.
+    let mut zombie = Command::new("true").spawn().expect("spawn `true`");
+    let zombie_pid = zombie.id();
+    // `true` exits in microseconds; give it ample margin to become a zombie
+    // before the daemon reads the lock (we cannot wait() it — that would reap it).
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    let run_dir = orkia_dir.join("run");
+    std::fs::create_dir_all(&run_dir).expect("create run dir");
+    let lock = run_dir.join("pty-daemon.lock");
+    std::fs::write(&lock, format!("{zombie_pid}\n")).expect("write zombie lock");
+
+    let out = Command::new(orkia_bin())
+        .env("HOME", home.path())
+        .args(["--detach", "-c", "@echo revived"])
+        .output()
+        .expect("spawn detach");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let socket = run_dir.join("pty-daemon.sock");
+    wait_for_path(&socket);
+    assert!(
+        socket.exists(),
+        "daemon must start despite a zombie-held stale lock"
+    );
+
+    // Reap the zombie so the test leaves no corpse behind.
+    let _ = zombie.wait();
+}
+
+#[test]
 fn daemon_lists_multiple_parallel_jobs() {
     let home = tempfile::tempdir().expect("temp home");
     let orkia_dir = home.path().join(".orkia");
