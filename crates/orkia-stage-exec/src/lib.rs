@@ -36,8 +36,9 @@ use std::time::{Duration, Instant};
 
 use orkia_shell::providers::{SpawnPlanInputs, build_spawn_plan};
 use orkia_shell_types::{
-    FinalResponseSource, JournalEnvelope, JournalEnvelopeHook, ProviderId, StagePlan,
+    EventType, FinalResponseSource, JournalEnvelope, JournalEnvelopeHook, ProviderId, StagePlan,
 };
+use sha2::{Digest, Sha256};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
 use collect::{PipelineOutputPayload, StageProc, await_output};
@@ -95,6 +96,74 @@ fn spawn_inputs(plan: &StagePlan, prepared: &PreparedStage) -> StageSpawnInputs 
         args,
         gemini_mcp_servers: spawn_plan.gemini_mcp_servers,
     }
+}
+
+/// Emit a first-class `PipelineOutput` journal event for a stage captured
+/// through the non-MCP channel (the `Stop`-hook turn-end capture). Mirrors
+/// the envelope the `orkia-pipe` MCP server emits in
+/// `mcp-pipe-server::deliver`, scoped to the stage's own agent, so the
+/// pipeline projection sees `PipelineOutput(agent=<stage>)` whether or not
+/// the agent cooperatively called `submit_pipeline_output`. Fail-soft: a
+/// journal send failure is logged, never propagated — the stage output is
+/// already captured and returned to the kernel.
+async fn announce_pipeline_output(
+    config: &StageExecConfig,
+    plan: &StagePlan,
+    output: &StageOutput,
+) {
+    let preview: String = String::from_utf8_lossy(&output.bytes)
+        .chars()
+        .take(280)
+        .collect();
+    let mut hasher = Sha256::new();
+    hasher.update(&output.bytes);
+    let digest = hasher.finalize();
+    let mut sha = String::with_capacity(16);
+    for byte in digest.iter().take(8) {
+        sha.push_str(&format!("{byte:02x}"));
+    }
+    let envelope = JournalEnvelope {
+        event_type: EventType::Hook,
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        job_id: Some(plan.job_id),
+        source: Some("orkia-pipe".into()),
+        agent: Some(plan.agent.clone()),
+        event: Some("PipelineOutput".into()),
+        response_path: Some(output.output_path.to_string_lossy().into_owned()),
+        response_sha256: Some(sha),
+        response_bytes: Some(output.bytes.len() as u64),
+        response_preview: Some(preview),
+        pipeline_id: Some(plan.pipeline_id.clone()),
+        stage_index: Some(plan.stage_index),
+        ..Default::default()
+    };
+    if let Err(e) = send_one_envelope(&config.socket_path, &envelope).await {
+        tracing::warn!(
+            stage = plan.stage_index,
+            agent = %plan.agent,
+            "pipeline: PipelineOutput announce failed: {e}",
+        );
+    }
+}
+
+/// One-shot connect → write one NDJSON line → shutdown, the same wire the
+/// MCP pipe server and the native forwarder speak. Bounded by short
+/// timeouts so a wedged hub never stalls the executor.
+async fn send_one_envelope(
+    socket_path: &std::path::Path,
+    envelope: &JournalEnvelope,
+) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::UnixStream;
+    use tokio::time::timeout;
+    let connect = timeout(Duration::from_millis(500), UnixStream::connect(socket_path));
+    let mut stream = connect.await??;
+    let mut line = serde_json::to_vec(envelope)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    line.push(b'\n');
+    timeout(Duration::from_millis(500), stream.write_all(&line)).await??;
+    timeout(Duration::from_millis(500), stream.shutdown()).await??;
+    Ok(())
 }
 
 /// Shell-owned configuration every stage execution needs. None of these
@@ -198,6 +267,18 @@ impl StageExecutor {
 
         let result = self.spawn_and_collect(plan, run_dir, prepared, rx).await;
         self.remove_waiter(&key);
+        // The pipeline projection's contract is that every stage's output
+        // is a `PipelineOutput(agent=<stage>)` row regardless of which
+        // capture channel fired. The MCP safety net already emits that
+        // envelope when the agent cooperates (`via_mcp`); the `Stop`-hook
+        // turn-end capture otherwise only produces an `AgentFinalResponse`,
+        // leaving the pipeline projection blind. Announce it here for that
+        // path so a stage captured via the hook is still first-class.
+        if let Ok(output) = &result
+            && !output.via_mcp
+        {
+            announce_pipeline_output(&self.config, plan, output).await;
+        }
         result
     }
 
@@ -426,6 +507,54 @@ mod tests {
         exec.on_envelope(&env);
 
         assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn announce_emits_pipeline_output_scoped_to_the_stage_agent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let socket_path = tmp.path().join("orkia.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let listener = tokio::net::UnixListener::from_std(listener).expect("tokio listener");
+        let collector = tokio::spawn(async move {
+            use tokio::io::AsyncBufReadExt;
+            let Ok((stream, _)) = listener.accept().await else {
+                return Vec::new();
+            };
+            let mut lines = tokio::io::BufReader::new(stream).lines();
+            let mut out = Vec::new();
+            while let Ok(Some(line)) = lines.next_line().await {
+                out.push(line);
+            }
+            out
+        });
+
+        let mut config = test_config();
+        config.socket_path = socket_path;
+        let mut plan = claude_plan();
+        plan.agent = "rex".into();
+        plan.stage_index = 1;
+        let output = StageOutput {
+            bytes: b"SAFE".to_vec(),
+            via_mcp: false,
+            elapsed_ms: 12,
+            output_path: PathBuf::from("/run/stage-1/final-response.md"),
+        };
+
+        announce_pipeline_output(&config, &plan, &output).await;
+
+        let lines = collector.await.expect("collector");
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let env: JournalEnvelope = serde_json::from_str(&lines[0]).expect("parse");
+        assert_eq!(env.event.as_deref(), Some("PipelineOutput"));
+        assert_eq!(env.agent.as_deref(), Some("rex"));
+        assert_eq!(env.pipeline_id.as_deref(), Some("p"));
+        assert_eq!(env.stage_index, Some(1));
+        assert_eq!(env.response_bytes, Some(4));
+        assert_eq!(
+            env.response_path.as_deref(),
+            Some("/run/stage-1/final-response.md")
+        );
     }
 
     #[test]

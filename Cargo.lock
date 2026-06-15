@@ -6033,11 +6033,13 @@ dependencies = [
 name = "orkia-stage-exec"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "libc",
  "orkia-shell",
  "orkia-shell-types",
  "orkia-terminal-core",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "tokio",
  "tracing",

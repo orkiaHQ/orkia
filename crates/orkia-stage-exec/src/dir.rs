@@ -94,10 +94,13 @@ pub(crate) fn install_stage_hooks(plan: &StagePlan, run_dir: &Path) {
 }
 
 /// Build the env an interactive stage agent inherits: the pipeline/stage
-/// /job ids and the provider hint. `ORKIA_JOB_ID` is load-bearing — the
-/// `Stop` hook's `orkia bridge` reads it to tag the final-response event.
-/// The MCP config is delivered via `--mcp-config` (added at spawn for
-/// claude), not env, matching Solo dispatch.
+/// /job ids, the stage's agent name, and the provider hint. `ORKIA_JOB_ID`
+/// is load-bearing — the `Stop` hook's `orkia bridge` reads it to tag the
+/// final-response event. `ORKIA_AGENT_NAME` is what attributes a stage's
+/// captured turn to `faye`/`rex` instead of falling back to the bare
+/// provider source ("claude") — Solo dispatch sets it the same way
+/// (`job/spawn.rs`). The MCP config is delivered via `--mcp-config` (added
+/// at spawn for claude), not env, matching Solo dispatch.
 pub(crate) fn stage_env(plan: &StagePlan) -> Vec<(String, String)> {
     let mut env = vec![
         ("ORKIA_PIPELINE_ID".to_string(), plan.pipeline_id.clone()),
@@ -106,6 +109,7 @@ pub(crate) fn stage_env(plan: &StagePlan) -> Vec<(String, String)> {
             plan.stage_index.to_string(),
         ),
         ("ORKIA_JOB_ID".to_string(), plan.job_id.to_string()),
+        ("ORKIA_AGENT_NAME".to_string(), plan.agent.clone()),
     ];
     if let Some(provider) = &plan.provider {
         env.push(("ORKIA_PROVIDER".to_string(), provider.clone()));
@@ -286,6 +290,7 @@ mod tests {
         assert_eq!(env["ORKIA_PIPELINE_ID"], "pipe-123");
         assert_eq!(env["ORKIA_STAGE_INDEX"], "2");
         assert_eq!(env["ORKIA_JOB_ID"], "77");
+        assert_eq!(env["ORKIA_AGENT_NAME"], "sage");
         assert_eq!(env["ORKIA_PROVIDER"], "anthropic");
         // MCP config now arrives via `--mcp-config`, not env.
         assert!(!env.contains_key("ORKIA_MCP_CONFIG"));
