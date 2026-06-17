@@ -96,10 +96,14 @@ pub struct DispatchSealRecord {
     /// The acceptance command that produced this verdict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept_command: Option<String>,
-    /// GlobalVerdict-only: the fleet re-plan round this integration verdict
-    /// judged (`0` for the first pass). `None` on task-level records.
+    /// GlobalVerdict / ReplanDecision: the fleet round (`0` for the first pass).
+    /// `None` on task-level records.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub round: Option<u32>,
+    /// ReplanDecision-only: the controller's choice for the round (e.g.
+    /// `rerun-all`, `give-up: <reason>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decision: Option<String>,
     pub prev_hash: String,
     pub hash: String,
 }
@@ -160,6 +164,17 @@ fn compute_global_verdict_hash(
     hex::encode(h.finalize())
 }
 
+/// SHA-256 over a [`DecisionKind::ReplanDecision`] record's linked fields.
+fn compute_replan_hash(prev_hash: &str, round: u32, decision: &str, ts: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(prev_hash.as_bytes());
+    h.update(DecisionKind::ReplanDecision.as_str().as_bytes());
+    h.update(round.to_le_bytes());
+    h.update(decision.as_bytes());
+    h.update(ts.as_bytes());
+    hex::encode(h.finalize())
+}
+
 /// Append-only dispatch SEAL chain for one RFC.
 pub struct DispatchSeal {
     path: PathBuf,
@@ -206,6 +221,7 @@ impl DispatchSeal {
             passed: None,
             accept_command: None,
             round: None,
+            decision: None,
             prev_hash,
             hash: hash.clone(),
         };
@@ -251,6 +267,7 @@ impl DispatchSeal {
             passed: Some(passed),
             accept_command: Some(accept_command.to_string()),
             round: None,
+            decision: None,
             prev_hash,
             hash: hash.clone(),
         };
@@ -292,6 +309,37 @@ impl DispatchSeal {
             passed: Some(passed),
             accept_command: Some(accept_command.to_string()),
             round: Some(round),
+            decision: None,
+            prev_hash,
+            hash: hash.clone(),
+        };
+        self.append(&record)?;
+        Ok(hash)
+    }
+
+    /// Seal one fleet re-plan decision (SPEC-FLEET-CONVERGENCE-V2): after an
+    /// integration verdict failed, what the controller chose for `round`.
+    pub fn seal_replan_decision(
+        &self,
+        round: u32,
+        decision: &str,
+        ts: &str,
+    ) -> Result<String, SealError> {
+        let prev_hash = self.tip()?.unwrap_or_else(|| ZERO_HASH.to_string());
+        let hash = compute_replan_hash(&prev_hash, round, decision, ts);
+        let record = DispatchSealRecord {
+            kind: DecisionKind::ReplanDecision,
+            ts: ts.to_string(),
+            task_id: "<rfc>".to_string(),
+            agent: "<fleet>".to_string(),
+            response_sha256: None,
+            response_path: String::new(),
+            attempt: None,
+            exit_code: None,
+            passed: None,
+            accept_command: None,
+            round: Some(round),
+            decision: Some(decision.to_string()),
             prev_hash,
             hash: hash.clone(),
         };
@@ -340,6 +388,12 @@ impl DispatchSeal {
                     r.exit_code.unwrap_or(0),
                     r.passed.unwrap_or(false),
                     r.accept_command.as_deref().unwrap_or(""),
+                    &r.ts,
+                ),
+                DecisionKind::ReplanDecision => compute_replan_hash(
+                    &r.prev_hash,
+                    r.round.unwrap_or(0),
+                    r.decision.as_deref().unwrap_or(""),
                     &r.ts,
                 ),
                 _ => {

@@ -61,6 +61,11 @@ pub enum DecisionKind {
     /// once the DAG drained. Sealed into the dispatch chain so the whole
     /// convergence saga (per round) is reconstructable.
     GlobalVerdict,
+    /// One fleet re-plan decision (SPEC-FLEET-CONVERGENCE-V2): after an
+    /// integration `GlobalVerdict` failed, what the controller chose to do
+    /// (re-run, give up) for that round. Sealed so the whole re-planning saga
+    /// — every round and decision — is reconstructable.
+    ReplanDecision,
 }
 
 impl DecisionKind {
@@ -75,6 +80,7 @@ impl DecisionKind {
             Self::DispatchOutput => "dispatch_output",
             Self::AcceptanceVerdict => "acceptance_verdict",
             Self::GlobalVerdict => "global_verdict",
+            Self::ReplanDecision => "replan_decision",
         }
     }
 }

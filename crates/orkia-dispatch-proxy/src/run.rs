@@ -37,8 +37,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use orkia_shell_types::dispatch_kernel::{
-    DispatchAbortRequest, DispatchAdvanceRequest, DispatchAdvanceResponse, TaskOutcome,
-    TaskOutputRef, TaskPlan,
+    DispatchAbortRequest, DispatchAdvanceRequest, DispatchAdvanceResponse, DispatchAuthorizeRequest,
+    DispatchAuthorizeResponse, TaskOutcome, TaskOutputRef, TaskPlan,
 };
 use orkia_shell_types::{
     DaemonJobs, DetachedSpawnRequest, DetachedSpawner, FinalResponseEvent, FinalResponseSource,
@@ -90,6 +90,15 @@ enum Step {
 enum Advanced {
     Wave(Vec<TaskPlan>),
     Stop,
+}
+
+/// What [`Driver::finalize_round`] decided once the DAG drained (V2).
+enum FleetStep {
+    /// Terminal: close the run with this reason (`converged` / `integration
+    /// failed` / `oscillating` / `completed`).
+    Stop(String),
+    /// Re-plan: drive this fresh round's first wave (from a re-authorize).
+    Replan(Vec<TaskPlan>),
 }
 
 /// One task's acceptance oracle (SPEC-CONVERGENCE-LOOP-V1). Proxy-local: built
@@ -147,6 +156,11 @@ pub(crate) struct DriverConfig {
     /// RFC-level integration oracle (SPEC-FLEET-CONVERGENCE-V2): run once the DAG
     /// drains, its verdict sealed as a `GlobalVerdict`. `None` ⇒ no fleet oracle.
     pub global_accept: Option<String>,
+    /// Max fleet re-plan rounds on integration failure (`0` ⇒ no re-plan).
+    pub max_replans: u32,
+    /// The authorize request, kept so a re-plan round can re-authorize the same
+    /// DAG with the kernel (the OSS trivial fallback re-runs every task).
+    pub authorize_req: DispatchAuthorizeRequest,
 }
 
 /// Single owner of one run's mutable state.
@@ -171,6 +185,15 @@ pub(crate) struct Driver {
     verdict_tx: tokio::sync::mpsc::UnboundedSender<ProxyMsg>,
     /// RFC-level integration oracle (SPEC-FLEET-CONVERGENCE-V2).
     global_accept: Option<String>,
+    /// Max fleet re-plan rounds (`0` ⇒ no re-plan).
+    max_replans: u32,
+    /// Kept for re-authorize on a re-plan round.
+    authorize_req: DispatchAuthorizeRequest,
+    /// Current fleet round (`0` = first pass; bumped per re-plan).
+    round: u32,
+    /// Last integration-failure signature, for no-progress (anti-oscillation)
+    /// detection: an unchanged failure across rounds stops the loop.
+    last_fail_sig: Option<String>,
 }
 
 impl Driver {
@@ -193,6 +216,10 @@ impl Driver {
             accept_specs: cfg.accept_specs,
             verdict_tx: cfg.verdict_tx,
             global_accept: cfg.global_accept,
+            max_replans: cfg.max_replans,
+            authorize_req: cfg.authorize_req,
+            round: 0,
+            last_fail_sig: None,
         }
     }
 
@@ -630,10 +657,14 @@ impl Driver {
         })?;
         Ok(match resp {
             DispatchAdvanceResponse::NextWave { wave } => Advanced::Wave(wave),
-            DispatchAdvanceResponse::Completed { .. } => {
-                self.close_run(&self.finalize_integration());
-                Advanced::Stop
-            }
+            DispatchAdvanceResponse::Completed { .. } => match self.finalize_round() {
+                FleetStep::Stop(reason) => {
+                    self.close_run(&reason);
+                    Advanced::Stop
+                }
+                // Re-plan: the kernel re-authorized a fresh round; keep driving.
+                FleetStep::Replan(wave) => Advanced::Wave(wave),
+            },
             DispatchAdvanceResponse::Paused { failed } => {
                 self.close_run(&format!("paused: {}", first_or(&failed, task_id)));
                 Advanced::Stop
@@ -651,31 +682,111 @@ impl Driver {
         })
     }
 
-    /// Run the RFC-level integration oracle once the DAG has drained
-    /// (SPEC-FLEET-CONVERGENCE-V2, increment 1 = the fleet verdict + provenance;
-    /// the re-plan loop is increment 2). Returns the run-close reason. Runs
-    /// synchronously: the DAG is drained, so no other task is in flight to
-    /// starve. Sealing is fail-soft at close — the run is ending and the issues
-    /// remain the source of truth.
-    fn finalize_integration(&self) -> String {
+    /// The DAG has drained: run the RFC-level integration oracle (if any), seal
+    /// the round's `GlobalVerdict`, and decide the fleet's next step
+    /// (SPEC-FLEET-CONVERGENCE-V2). Pass ⇒ `converged`; fail ⇒ re-plan another
+    /// round (bounded by `max_replans` + no-progress detection) or stop.
+    ///
+    /// OSS controller `(b)` + trivial brain `(a)`: the brain here is "re-run
+    /// all" via re-authorize (the kernel re-schedules the same DAG). A premium
+    /// kernel brain would instead return a TARGETED re-dispatch + amend the DAG
+    /// in place — it slots in where `replan_rerun_all` is called.
+    ///
+    /// Runs synchronously: the DAG is drained, so no task is in flight to starve.
+    fn finalize_round(&mut self) -> FleetStep {
         let Some(cmd) = self.global_accept.clone() else {
-            return "completed".to_string();
+            return FleetStep::Stop("completed".to_string());
         };
         let result = crate::oracle::run_acceptance(&cmd, self.working_dir.as_deref());
-        if let Err(e) = self.seal.seal_global_verdict(
-            0,
-            &cmd,
-            result.exit_code,
-            result.passed(),
-            &(self.clock)(),
-        ) {
+        if let Err(e) =
+            self.seal
+                .seal_global_verdict(self.round, &cmd, result.exit_code, result.passed(), &(self.clock)())
+        {
             tracing::warn!(run_id = %self.run_id, error = %e, "global verdict seal failed");
         }
         if result.passed() {
-            "converged".to_string()
-        } else {
-            format!("integration failed: `{cmd}` exit {}", result.exit_code)
+            return FleetStep::Stop("converged".to_string());
         }
+        // Integration failed — consider a re-plan round.
+        if self.round >= self.max_replans {
+            return FleetStep::Stop(format!(
+                "integration failed: `{cmd}` exit {} (after {} re-plan(s))",
+                result.exit_code, self.round
+            ));
+        }
+        let sig = failure_signature(&result.output_tail);
+        if self.last_fail_sig.as_deref() == Some(sig.as_str()) {
+            // The failure is unchanged since the last round → no progress; stop
+            // rather than thrash (anti-oscillation).
+            let _ = self
+                .seal
+                .seal_replan_decision(self.round, "give-up: no progress", &(self.clock)());
+            return FleetStep::Stop("oscillating: integration failure unchanged".to_string());
+        }
+        self.last_fail_sig = Some(sig);
+        if let Err(e) = self
+            .seal
+            .seal_replan_decision(self.round, "rerun-all", &(self.clock)())
+        {
+            tracing::warn!(run_id = %self.run_id, error = %e, "replan decision seal failed");
+        }
+        match self.replan_rerun_all() {
+            Ok(wave) => {
+                self.round += 1;
+                FleetStep::Replan(wave)
+            }
+            Err(e) => FleetStep::Stop(format!("re-plan failed: {e}")),
+        }
+    }
+
+    /// The OSS trivial re-plan: reset every task to `Pending` and re-authorize
+    /// the same DAG with the kernel, returning its fresh first wave. The agents
+    /// re-run in the SAME workspace, so each round sees the prior round's
+    /// changes (fleet-scale self-repair). Per-task `accept` oracles re-converge
+    /// each task within the round.
+    fn replan_rerun_all(&mut self) -> Result<Vec<TaskPlan>, DriverError> {
+        let resp = self.kernel.dispatch_authorize(self.authorize_req.clone())?;
+        let wave = match resp {
+            DispatchAuthorizeResponse::Authorized { run_id, wave, .. } => {
+                self.run_id = run_id;
+                wave
+            }
+            DispatchAuthorizeResponse::Refused { reason } => {
+                return Err(DriverError::Spawn {
+                    task_id: "<re-plan>".to_string(),
+                    reason: format!("kernel refused re-authorize: {reason}"),
+                });
+            }
+        };
+        // Re-stamp the run identity with the new round's run_id (advance keys on
+        // it); keep the original `started`.
+        if let Ok(Some(mut meta)) = self.store.read_run() {
+            meta.run_id = self.run_id.clone();
+            if let Err(e) = self.store.write_run(&meta) {
+                tracing::warn!(run_id = %self.run_id, error = %e, "re-plan run-meta rewrite failed");
+            }
+        }
+        // Reset every task to `Pending`; `process_wave` re-spawns from the wave.
+        for task in &self.authorize_req.tasks.clone() {
+            self.reset_issue_for_replan(&task.id)?;
+        }
+        Ok(wave)
+    }
+
+    /// Reset one task's issue to `Pending` for a fresh re-plan round: clear the
+    /// job, response, attempt, and per-task seals; keep `id`/`agent`/`deps`.
+    fn reset_issue_for_replan(&self, task_id: &str) -> Result<(), DriverError> {
+        if let Some(mut issue) = self.store.read(task_id)? {
+            issue.meta.status = Status::Pending;
+            issue.meta.job_id = None;
+            issue.meta.response_sha = None;
+            issue.meta.seal = None;
+            issue.meta.attempt = 0;
+            issue.meta.verdict_seal = None;
+            issue.response = None;
+            self.store.write(&issue)?;
+        }
+        Ok(())
     }
 
     /// External cancel: close the run and tell the kernel to drop state.
@@ -725,6 +836,17 @@ impl Driver {
             tracing::warn!(run_id = %self.run_id, error = %e, "dispatch abort RPC failed");
         }
     }
+}
+
+/// A stable signature of an integration-failure output, for no-progress
+/// (anti-oscillation) detection across re-plan rounds. Hashes the trimmed tail:
+/// a byte-identical failure two rounds running means the re-plan achieved
+/// nothing, so the loop stops rather than thrash.
+fn failure_signature(output_tail: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(output_tail.trim().as_bytes());
+    hex::encode(h.finalize())
 }
 
 /// Build a self-repair prompt for a retry (SPEC-CONVERGENCE-LOOP-V1, Phase 5):

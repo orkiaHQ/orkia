@@ -75,11 +75,11 @@ impl KernelRpc for FakeKernel {
         &self,
         _req: DispatchAuthorizeRequest,
     ) -> Result<DispatchAuthorizeResponse, KernelRpcError> {
-        match self.authorize.lock().unwrap().take() {
+        // Clone (not take): a fleet re-plan re-authorizes the same DAG each
+        // round, so the fake returns the same first wave every time.
+        match self.authorize.lock().unwrap().clone() {
             Some(r) => Ok(r),
-            None => Err(KernelRpcError::Unavailable(
-                "authorize already taken".into(),
-            )),
+            None => Err(KernelRpcError::Unavailable("authorize unset".into())),
         }
     }
 
@@ -310,6 +310,7 @@ pub(crate) fn request(rfc_dir: &Path, tasks: Vec<DispatchTaskSpec>) -> DispatchR
         max_inflight: 4,
         on_task_fail: "pause".into(),
         global_accept: None,
+        max_replans: 0,
         tasks,
     }
 }
@@ -322,6 +323,20 @@ pub(crate) fn request_with_global_accept(
 ) -> DispatchRequest {
     DispatchRequest {
         global_accept: Some(accept.into()),
+        ..request(rfc_dir, tasks)
+    }
+}
+
+/// A request with an integration oracle AND a fleet re-plan budget (V2 inc. 2).
+pub(crate) fn request_with_replan(
+    rfc_dir: &Path,
+    accept: &str,
+    max_replans: usize,
+    tasks: Vec<DispatchTaskSpec>,
+) -> DispatchRequest {
+    DispatchRequest {
+        global_accept: Some(accept.into()),
+        max_replans,
         ..request(rfc_dir, tasks)
     }
 }

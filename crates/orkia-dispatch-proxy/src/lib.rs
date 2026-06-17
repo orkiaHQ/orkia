@@ -116,6 +116,9 @@ pub struct DispatchRequest {
     /// RFC-level integration oracle (SPEC-FLEET-CONVERGENCE-V2). Run once the
     /// DAG drains; its verdict is sealed. `None` ⇒ the run ends when the DAG does.
     pub global_accept: Option<String>,
+    /// Max fleet re-plan rounds on integration failure. `0` ⇒ no re-plan (the
+    /// verdict is recorded, the run ends).
+    pub max_replans: usize,
     pub tasks: Vec<DispatchTaskSpec>,
 }
 
@@ -219,7 +222,7 @@ impl KernelDispatchProxy {
         if let Err(reason) = self.open_run(&req, &run_id, &authorize) {
             return DispatchStartOutcome::Refused { reason };
         }
-        let handle = self.launch(req, run_id, wave);
+        let handle = self.launch(req, run_id, wave, authorize);
         DispatchStartOutcome::Started {
             total_tasks,
             handle,
@@ -287,7 +290,7 @@ impl KernelDispatchProxy {
                 reason: format!("run meta unwritable: {e}"),
             };
         }
-        let handle = self.launch(req, run_id, wave);
+        let handle = self.launch(req, run_id, wave, authorize);
         ResumeOutcome::Resumed {
             total_tasks,
             handle,
@@ -337,7 +340,13 @@ impl KernelDispatchProxy {
     }
 
     /// Build the driver, wire the fan-in subscription, and start the actor.
-    fn launch(&self, req: DispatchRequest, run_id: String, wave: Vec<TaskPlan>) -> RunHandle {
+    fn launch(
+        &self,
+        req: DispatchRequest,
+        run_id: String,
+        wave: Vec<TaskPlan>,
+        authorize: DispatchAuthorizeRequest,
+    ) -> RunHandle {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         // Proxy-local acceptance specs (SPEC-CONVERGENCE-LOOP-V1): built from the
         // RFC frontmatter, keyed by task id; never sent to the kernel.
@@ -370,6 +379,8 @@ impl KernelDispatchProxy {
             accept_specs,
             verdict_tx: tx.clone(),
             global_accept: req.global_accept,
+            max_replans: req.max_replans as u32,
+            authorize_req: authorize,
         });
         let sink = tx.clone();
         self.responses.subscribe(Arc::new(move |ev| {
