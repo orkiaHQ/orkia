@@ -113,6 +113,9 @@ pub struct DispatchRequest {
     pub strategy: String,
     pub max_inflight: usize,
     pub on_task_fail: String,
+    /// RFC-level integration oracle (SPEC-FLEET-CONVERGENCE-V2). Run once the
+    /// DAG drains; its verdict is sealed. `None` ⇒ the run ends when the DAG does.
+    pub global_accept: Option<String>,
     pub tasks: Vec<DispatchTaskSpec>,
 }
 
@@ -366,6 +369,7 @@ impl KernelDispatchProxy {
             clock: Arc::clone(&self.clock),
             accept_specs,
             verdict_tx: tx.clone(),
+            global_accept: req.global_accept,
         });
         let sink = tx.clone();
         self.responses.subscribe(Arc::new(move |ev| {

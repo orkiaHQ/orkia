@@ -122,6 +122,18 @@ pub struct DispatchFrontmatterBlock {
     /// `pause` (default, fail-closed — dependents blocked) | `abort`.
     #[serde(default = "dispatch_default_on_fail")]
     pub on_task_fail: String,
+    /// RFC-level / integration acceptance oracle (SPEC-FLEET-CONVERGENCE-V2): a
+    /// shell command run once the DAG drains; `exit 0` ⇒ the whole RFC goal is
+    /// verified. `None` ⇒ no fleet loop (the run completes when the DAG does).
+    /// Distinct from a task's own `accept` (which converges that one task).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept: Option<String>,
+    /// Max fleet re-plan ROUNDS when the integration `accept` fails. `None`/`0`
+    /// ⇒ no re-plan (the integration verdict is recorded, the run ends). The
+    /// re-plan loop itself is V2 increment 2 (the brain); this bound is carried
+    /// from the schema now so RFCs are forward-compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_replans: Option<usize>,
     /// The DAG nodes, authored as `[[dispatch.task]]` array-of-tables.
     #[serde(default, rename = "task")]
     pub tasks: Vec<DispatchTaskBlock>,
@@ -485,6 +497,9 @@ body = \"Do the thing.\"\n\
             max_inflight: 2,
             aggregation: None,
             on_task_fail: "abort".into(),
+            // Exercise the fleet-level oracle fields' round-trip (V2).
+            accept: Some("cargo test --workspace".into()),
+            max_replans: Some(2),
             tasks: vec![DispatchTaskBlock {
                 id: "t-1".into(),
                 agent: "faye".into(),

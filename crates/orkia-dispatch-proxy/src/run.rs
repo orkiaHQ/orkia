@@ -144,6 +144,9 @@ pub(crate) struct DriverConfig {
     /// Sender into the actor's own channel, so an off-actor oracle thread can
     /// post its [`ProxyMsg::Verdict`] back to the actor.
     pub verdict_tx: tokio::sync::mpsc::UnboundedSender<ProxyMsg>,
+    /// RFC-level integration oracle (SPEC-FLEET-CONVERGENCE-V2): run once the DAG
+    /// drains, its verdict sealed as a `GlobalVerdict`. `None` ⇒ no fleet oracle.
+    pub global_accept: Option<String>,
 }
 
 /// Single owner of one run's mutable state.
@@ -166,6 +169,8 @@ pub(crate) struct Driver {
     accept_specs: HashMap<String, AcceptSpec>,
     /// Back-channel for off-actor oracle threads.
     verdict_tx: tokio::sync::mpsc::UnboundedSender<ProxyMsg>,
+    /// RFC-level integration oracle (SPEC-FLEET-CONVERGENCE-V2).
+    global_accept: Option<String>,
 }
 
 impl Driver {
@@ -187,6 +192,7 @@ impl Driver {
             job_to_task: HashMap::new(),
             accept_specs: cfg.accept_specs,
             verdict_tx: cfg.verdict_tx,
+            global_accept: cfg.global_accept,
         }
     }
 
@@ -625,7 +631,7 @@ impl Driver {
         Ok(match resp {
             DispatchAdvanceResponse::NextWave { wave } => Advanced::Wave(wave),
             DispatchAdvanceResponse::Completed { .. } => {
-                self.close_run("completed");
+                self.close_run(&self.finalize_integration());
                 Advanced::Stop
             }
             DispatchAdvanceResponse::Paused { failed } => {
@@ -643,6 +649,33 @@ impl Driver {
                 Advanced::Stop
             }
         })
+    }
+
+    /// Run the RFC-level integration oracle once the DAG has drained
+    /// (SPEC-FLEET-CONVERGENCE-V2, increment 1 = the fleet verdict + provenance;
+    /// the re-plan loop is increment 2). Returns the run-close reason. Runs
+    /// synchronously: the DAG is drained, so no other task is in flight to
+    /// starve. Sealing is fail-soft at close — the run is ending and the issues
+    /// remain the source of truth.
+    fn finalize_integration(&self) -> String {
+        let Some(cmd) = self.global_accept.clone() else {
+            return "completed".to_string();
+        };
+        let result = crate::oracle::run_acceptance(&cmd, self.working_dir.as_deref());
+        if let Err(e) = self.seal.seal_global_verdict(
+            0,
+            &cmd,
+            result.exit_code,
+            result.passed(),
+            &(self.clock)(),
+        ) {
+            tracing::warn!(run_id = %self.run_id, error = %e, "global verdict seal failed");
+        }
+        if result.passed() {
+            "converged".to_string()
+        } else {
+            format!("integration failed: `{cmd}` exit {}", result.exit_code)
+        }
     }
 
     /// External cancel: close the run and tell the kernel to drop state.

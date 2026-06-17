@@ -153,6 +153,7 @@ impl Repl {
             strategy: block.strategy,
             max_inflight: block.max_inflight,
             on_task_fail: block.on_task_fail,
+            global_accept: block.accept,
             tasks,
         })
     }

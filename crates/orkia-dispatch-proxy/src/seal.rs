@@ -96,6 +96,10 @@ pub struct DispatchSealRecord {
     /// The acceptance command that produced this verdict.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accept_command: Option<String>,
+    /// GlobalVerdict-only: the fleet re-plan round this integration verdict
+    /// judged (`0` for the first pass). `None` on task-level records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub round: Option<u32>,
     pub prev_hash: String,
     pub hash: String,
 }
@@ -129,6 +133,26 @@ fn compute_verdict_hash(
     h.update(DecisionKind::AcceptanceVerdict.as_str().as_bytes());
     h.update(task_id.as_bytes());
     h.update(attempt.to_le_bytes());
+    h.update(exit_code.to_le_bytes());
+    h.update([passed as u8]);
+    h.update(command.as_bytes());
+    h.update(ts.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// SHA-256 over a [`DecisionKind::GlobalVerdict`] record's linked fields.
+fn compute_global_verdict_hash(
+    prev_hash: &str,
+    round: u32,
+    exit_code: i32,
+    passed: bool,
+    command: &str,
+    ts: &str,
+) -> String {
+    let mut h = Sha256::new();
+    h.update(prev_hash.as_bytes());
+    h.update(DecisionKind::GlobalVerdict.as_str().as_bytes());
+    h.update(round.to_le_bytes());
     h.update(exit_code.to_le_bytes());
     h.update([passed as u8]);
     h.update(command.as_bytes());
@@ -181,6 +205,7 @@ impl DispatchSeal {
             exit_code: None,
             passed: None,
             accept_command: None,
+            round: None,
             prev_hash,
             hash: hash.clone(),
         };
@@ -225,6 +250,48 @@ impl DispatchSeal {
             exit_code: Some(exit_code),
             passed: Some(passed),
             accept_command: Some(accept_command.to_string()),
+            round: None,
+            prev_hash,
+            hash: hash.clone(),
+        };
+        self.append(&record)?;
+        Ok(hash)
+    }
+
+    /// Seal one fleet round's RFC-level / integration verdict
+    /// (SPEC-FLEET-CONVERGENCE-V2): the `[dispatch].accept` result once the DAG
+    /// drained. Chains onto the tip like the task-level seals.
+    #[allow(clippy::too_many_arguments)]
+    pub fn seal_global_verdict(
+        &self,
+        round: u32,
+        accept_command: &str,
+        exit_code: i32,
+        passed: bool,
+        ts: &str,
+    ) -> Result<String, SealError> {
+        let prev_hash = self.tip()?.unwrap_or_else(|| ZERO_HASH.to_string());
+        let hash = compute_global_verdict_hash(
+            &prev_hash,
+            round,
+            exit_code,
+            passed,
+            accept_command,
+            ts,
+        );
+        let record = DispatchSealRecord {
+            kind: DecisionKind::GlobalVerdict,
+            ts: ts.to_string(),
+            // task_id is the run-level marker for a fleet verdict.
+            task_id: "<rfc>".to_string(),
+            agent: "<fleet>".to_string(),
+            response_sha256: None,
+            response_path: String::new(),
+            attempt: None,
+            exit_code: Some(exit_code),
+            passed: Some(passed),
+            accept_command: Some(accept_command.to_string()),
+            round: Some(round),
             prev_hash,
             hash: hash.clone(),
         };
@@ -262,6 +329,14 @@ impl DispatchSeal {
                     &r.prev_hash,
                     &r.task_id,
                     r.attempt.unwrap_or(0),
+                    r.exit_code.unwrap_or(0),
+                    r.passed.unwrap_or(false),
+                    r.accept_command.as_deref().unwrap_or(""),
+                    &r.ts,
+                ),
+                DecisionKind::GlobalVerdict => compute_global_verdict_hash(
+                    &r.prev_hash,
+                    r.round.unwrap_or(0),
                     r.exit_code.unwrap_or(0),
                     r.passed.unwrap_or(false),
                     r.accept_command.as_deref().unwrap_or(""),
@@ -426,6 +501,28 @@ mod tests {
         assert_eq!(recs[3].hash, v1);
         assert_eq!(recs[3].passed, Some(true));
         assert!(s.verify().unwrap()); // mixed-kind chain verifies
+    }
+
+    #[test]
+    fn global_verdict_chains_after_task_records_and_verifies() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = seal(tmp.path());
+        // A full fleet round: task output + task verdict, then the integration
+        // GlobalVerdict for round 0.
+        s.seal_output("impl", "faye", Some("aaaa"), "issues/impl.md", "t1")
+            .unwrap();
+        s.seal_verdict("impl", "faye", 0, "cargo test -p x", 0, true, "t2")
+            .unwrap();
+        let g = s
+            .seal_global_verdict(0, "cargo test --workspace", 1, false, "t3")
+            .unwrap();
+        let recs = s.records().unwrap();
+        assert_eq!(recs.len(), 3);
+        assert_eq!(recs[2].kind, DecisionKind::GlobalVerdict);
+        assert_eq!(recs[2].hash, g);
+        assert_eq!(recs[2].round, Some(0));
+        assert_eq!(recs[2].passed, Some(false));
+        assert!(s.verify().unwrap()); // output + acceptance + global all verify
     }
 
     #[test]

@@ -56,6 +56,11 @@ pub enum DecisionKind {
     /// `DispatchOutput` records, so a verifier reconstructs the convergence
     /// (failed attempts included), tamper-evident.
     AcceptanceVerdict,
+    /// The RFC-level / integration verdict for one fleet round
+    /// (SPEC-FLEET-CONVERGENCE-V2): the `[dispatch].accept` command's result
+    /// once the DAG drained. Sealed into the dispatch chain so the whole
+    /// convergence saga (per round) is reconstructable.
+    GlobalVerdict,
 }
 
 impl DecisionKind {
@@ -69,6 +74,7 @@ impl DecisionKind {
             Self::DesignReviewed => "design_reviewed",
             Self::DispatchOutput => "dispatch_output",
             Self::AcceptanceVerdict => "acceptance_verdict",
+            Self::GlobalVerdict => "global_verdict",
         }
     }
 }

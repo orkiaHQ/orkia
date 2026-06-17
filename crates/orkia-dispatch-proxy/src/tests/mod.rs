@@ -14,6 +14,7 @@
 //! * [`resume`] — reconstruction from `resume_run` (`SPEC` §4.3 / step 5.D).
 
 mod convergence;
+mod fleet;
 mod fresh;
 mod resume;
 mod support;

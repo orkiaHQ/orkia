@@ -309,7 +309,20 @@ pub(crate) fn request(rfc_dir: &Path, tasks: Vec<DispatchTaskSpec>) -> DispatchR
         strategy: "dag".into(),
         max_inflight: 4,
         on_task_fail: "pause".into(),
+        global_accept: None,
         tasks,
+    }
+}
+
+/// A request with an RFC-level integration oracle (SPEC-FLEET-CONVERGENCE-V2).
+pub(crate) fn request_with_global_accept(
+    rfc_dir: &Path,
+    accept: &str,
+    tasks: Vec<DispatchTaskSpec>,
+) -> DispatchRequest {
+    DispatchRequest {
+        global_accept: Some(accept.into()),
+        ..request(rfc_dir, tasks)
     }
 }
 
