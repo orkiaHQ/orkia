@@ -127,8 +127,12 @@ impl Repl {
     fn cap_detail(&self, name: &str) -> Result<Vec<BlockContent>, String> {
         let agent = self.find_agent(name)?;
         let (caps, source) = self.effective_caps(agent);
+        // Count the agent's OWN policy capabilities, else the inherited global
+        // `[cage].policy` — mirroring `effective_caps`, so an agent running on the
+        // global policy shows its real rule count instead of a misleading 0.
         let rules = self
             .read_agent_policy(agent)
+            .or_else(|| self.read_global_policy())
             .map(|p| p.capabilities.len())
             .unwrap_or(0);
         let exec_note = if caps.exec {

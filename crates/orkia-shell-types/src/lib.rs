@@ -84,7 +84,8 @@ pub use exec::{
 // crate root — it would collide with the workspace-scope `Scope` (below). Reach
 pub use extensions::{
     AgentPipelineCoordinator, AgentPipelineRequest, AgentPipelineStage, AuthView, DaemonJobView,
-    DaemonJobs, DaemonStageView, DetachedSpawnRequest, DetachedSpawner, FinalResponseCallback,
+    DaemonJobs, DaemonStageView, DetachedCageWrapper, DetachedSpawnRequest, DetachedSpawner,
+    FinalResponseCallback,
     FinalResponseEvent, FinalResponseSource, JobEventObserver, JournalEnvelopeHook,
     JournalStopHook, PipelineDispatchOutcome, PipelineProgressCallback, PipelineProgressEvent,
 };

@@ -208,12 +208,27 @@ pub trait DaemonJobs: Send + Sync {
 /// - `agent_name` — for the daemon's job roster/label.
 /// - `extra_env` — only values the command line + config can't reconstruct
 ///   (e.g. the RFC project for `record_reasoning_scope` attribution).
+/// - `cage_wrapper` — the cage launcher the REPL resolved for this agent. The
+///   detached runtime cannot reliably re-derive it (it does not always load the
+///   REPL's `[cage]` config), so the REPL's decision travels on the request: a
+///   daemon-owned agent is caged iff the REPL would have caged it. `None` →
+///   spawn uncaged.
 #[derive(Clone, Debug, Default)]
 pub struct DetachedSpawnRequest {
     pub command: String,
     pub working_dir: Option<String>,
     pub agent_name: Option<String>,
     pub extra_env: Vec<(String, String)>,
+    pub cage_wrapper: Option<DetachedCageWrapper>,
+}
+
+/// The cage launcher + policy for a detached spawn — the transport mirror of
+/// the shell crate's `job::CageWrapper` (which this crate cannot name). Mapped
+/// to the daemon's wire `CageWrapperProto` by the spawner bridge.
+#[derive(Clone, Debug, Default)]
+pub struct DetachedCageWrapper {
+    pub cage_bin: String,
+    pub policy_path: String,
 }
 
 impl DetachedSpawnRequest {

@@ -310,6 +310,7 @@ impl Repl {
             let mut req = orkia_shell_types::DetachedSpawnRequest::new(line);
             req.working_dir = self.agent_cwd().map(|d| d.display().to_string());
             req.agent_name = Some(agent.to_string());
+            req.cage_wrapper = self.detached_cage(agent);
             return match spawner.spawn_detached(req) {
                 Ok(daemon_id) => Outcome::JobSpawned {
                     job_id: JobId(daemon_id),

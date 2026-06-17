@@ -491,6 +491,7 @@ mod agent_dispatch;
 mod approval;
 mod attention_builtin;
 mod builders;
+pub use builders::resolve_detached_cage;
 mod builtins_agent;
 mod builtins_app;
 mod builtins_cap;

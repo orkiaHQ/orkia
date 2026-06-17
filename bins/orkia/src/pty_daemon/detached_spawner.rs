@@ -10,9 +10,16 @@
 //! The transport model re-sends the ORIGINAL command line (`req.command`); the
 //! daemon wraps it `orkia -c "<command> &"` and the detached runtime re-parses it
 //! through the identical classifier → dispatch the REPL uses, re-deriving agent
-//! context / cage wrapper / hooks / stdin handling from its own config. So only
-//! the fields the runtime cannot re-derive travel on the request: command,
-//! working_dir, agent_name, extra_env.
+//! context / hooks / stdin handling from its own config. So most fields the
+//! runtime can reconstruct stay off the request: command, working_dir,
+//! agent_name, extra_env.
+//!
+//! The `cage_wrapper` is the exception: the runtime does not always load the
+//! REPL's `[cage]` config, so a re-derived cage cannot be trusted. The REPL's
+//! resolved wrapper therefore travels explicitly on the request and is mapped
+//! here onto the wire `CageWrapperProto` — a daemon-owned agent is caged iff the
+//! REPL would have caged it (fail-closed: absent ⇒ uncaged, never silently so
+//! when the user enabled the cage).
 //!
 //! Installed ONLY on the main REPL: [`provider`] returns `None` when this process
 //! is itself a detached runtime (`ORKIA_DETACHED_JOB_ID` set), so a runtime never
@@ -25,6 +32,7 @@ use orkia_shell::ShellConfig;
 use orkia_shell_types::{DetachedSpawnRequest, DetachedSpawner};
 
 use super::client_api::SpawnDetachedRequest;
+use super::protocol::CageWrapperProto;
 
 struct DetachedSpawnerBridge {
     config: ShellConfig,
@@ -36,6 +44,10 @@ impl DetachedSpawner for DetachedSpawnerBridge {
         wire.working_dir = req.working_dir;
         wire.agent_name = req.agent_name;
         wire.extra_env = req.extra_env;
+        wire.cage_wrapper = req.cage_wrapper.map(|w| CageWrapperProto {
+            cage_bin: w.cage_bin,
+            policy_path: w.policy_path,
+        });
         super::client_api::spawn_detached_request_id(wire, &self.config)
     }
 }

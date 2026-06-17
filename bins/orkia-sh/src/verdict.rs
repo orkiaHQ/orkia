@@ -71,8 +71,17 @@ fn verdict_str(v: Verdict) -> &'static str {
     }
 }
 
-/// The journal socket the cage's `~/.orkia/run` bind makes reachable.
+/// The journal socket the verdict is written to. A detached agent runtime exports
+/// `ORKIA_SOCKET_PATH` pointing at its per-job hub — and the hub, not the global
+/// socket, owns that job's SEAL chain, so a verdict posted to the global
+/// `orkia.sock` is silently dropped (it routes to no chain). Honor the per-job
+/// hub when set (mirrors `bridge.rs`); fall back to the global socket for
+/// foreground / uncaged sessions. This is provider-agnostic — every agent's
+/// mediated commands (and Linux's sole-shell shim) route through here.
 fn socket_path() -> PathBuf {
+    if let Some(p) = std::env::var_os("ORKIA_SOCKET_PATH") {
+        return PathBuf::from(p);
+    }
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();

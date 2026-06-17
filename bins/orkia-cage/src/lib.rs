@@ -439,6 +439,17 @@ fn build_profile_spec(program: &str, policy: &Policy) -> Result<sbpl::ProfileSpe
         read_only.push(h.join(".local/bin"));
         // macOS per-user caches (agents write here during a session).
         corpus_rw.push(h.join("Library/Caches"));
+        // The cage's audit channel: the `orkia-sh` hook writes each `cage.verdict`
+        // to the journal socket (verdict.rs `socket_path`) — the per-job hub
+        // (`ORKIA_SOCKET_PATH`) for a detached agent, else the global socket. On
+        // Linux the rootfs binds `~/.orkia/run`; macOS Seatbelt must grant the
+        // exact socket node or the hook fails-closed (CLAUDE.md #8) and NO verdict
+        // is recorded. Grant ONLY that socket, never `~/.orkia` — the agent still
+        // cannot read/write SEAL chains or other agents' state. Provider-agnostic.
+        let verdict_sock = std::env::var_os("ORKIA_SOCKET_PATH")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| h.join(".orkia/run/orkia.sock"));
+        corpus_rw.push(verdict_sock);
     }
     // The per-user temp dir (macOS `$TMPDIR` = /var/folders/…) — agents write
     // session temp files there; without it a full session breaks silently

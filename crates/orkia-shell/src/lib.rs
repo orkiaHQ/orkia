@@ -85,6 +85,7 @@ pub use config::{NotificationVerbosity, ShellConfig};
 pub use decision::{BlockContent, Decision, Mode, NoOpReason, Outcome, PipelineStage};
 pub use engine::{BrushSession, CommandOutput, ExecuteResult, ShellEngine};
 pub use error::ShellError;
+pub use repl::resolve_detached_cage;
 pub use forge_noop::NoopForgeBuilder;
 pub use history::History;
 pub use job::{JobController, JobId, JobKind, JobState};

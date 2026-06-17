@@ -408,17 +408,38 @@ impl Repl {
     /// file exists. This is the storage substrate the per-agent `cap` model
     /// requires — `@faye` and `@rex` resolve to distinct files.
     pub(crate) fn cage_wrapper(&self, agent: &str) -> Option<crate::job::CageWrapper> {
-        let cage = &self.config.cage;
-        if !cage.enabled {
-            return None;
+        // A detached runtime receives the REPL's resolved cage on its env
+        // (`runtime_spawn::build_env`) because it does not reliably re-derive
+        // `[cage]` from config. Honor that first so the runtime cages the AGENT
+        // it spawns in-process with exactly what the REPL decided.
+        if let (Ok(cage_bin), Ok(policy_path)) = (
+            std::env::var("ORKIA_DETACHED_CAGE_BIN"),
+            std::env::var("ORKIA_DETACHED_CAGE_POLICY"),
+        ) {
+            return Some(crate::job::CageWrapper {
+                cage_bin,
+                policy_path,
+            });
         }
-        let cage_bin = cage.bin.clone().unwrap_or_else(|| "orkia-cage".to_string());
-        let policy_path =
-            resolve_policy_path(&self.config.data_dir, agent, cage.policy.as_deref())?;
-        Some(crate::job::CageWrapper {
-            cage_bin,
-            policy_path,
-        })
+        resolve_detached_cage(&self.config, agent)
+            .map(|(cage_bin, policy_path)| crate::job::CageWrapper {
+                cage_bin,
+                policy_path,
+            })
+    }
+
+    /// The cage wrapper for `agent` as the transport type a [`DetachedSpawnRequest`]
+    /// carries — so a daemon-owned spawn is caged by the REPL's decision rather
+    /// than the runtime re-deriving (unreliably) from its own config.
+    pub(crate) fn detached_cage(
+        &self,
+        agent: &str,
+    ) -> Option<orkia_shell_types::DetachedCageWrapper> {
+        self.cage_wrapper(agent)
+            .map(|w| orkia_shell_types::DetachedCageWrapper {
+                cage_bin: w.cage_bin,
+                policy_path: w.policy_path,
+            })
     }
 }
 
@@ -437,6 +458,21 @@ pub(crate) fn resolve_policy_path(
         return Some(per_agent.to_string_lossy().into_owned());
     }
     Some(expand_tilde(global?))
+}
+
+/// Resolve the cage launcher + policy for `agent` from config alone (no `Repl`):
+/// `(cage_bin, policy_path)`, or `None` when the cage is disabled or no policy
+/// resolves. Shared by the REPL's `cage_wrapper` and the daemon's detached-spawn
+/// fallback (`handle_spawn`) so EVERY detached path — bare `@agent`, `--detach
+/// -c`, RFC dispatch — cages identically without each caller re-implementing it.
+pub fn resolve_detached_cage(config: &ShellConfig, agent: &str) -> Option<(String, String)> {
+    let cage = &config.cage;
+    if !cage.enabled {
+        return None;
+    }
+    let cage_bin = cage.bin.clone().unwrap_or_else(|| "orkia-cage".to_string());
+    let policy_path = resolve_policy_path(&config.data_dir, agent, cage.policy.as_deref())?;
+    Some((cage_bin, policy_path))
 }
 
 /// Expand a leading `~/` to `$HOME`. Other forms (bare `~`, `~user`) are

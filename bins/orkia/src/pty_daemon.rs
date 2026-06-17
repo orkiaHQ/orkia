@@ -489,8 +489,26 @@ fn handle_spawn(
     state: &mut DaemonState,
     config: &ShellConfig,
     command: String,
-    opts: runtime_spawn::SpawnOptions,
+    mut opts: runtime_spawn::SpawnOptions,
 ) {
+    // Fallback cage resolution for detached paths that do not thread it on the
+    // request themselves (`--detach -c`, RFC dispatch). The REPL sets it
+    // explicitly; here we resolve from the daemon's `[cage]` config + the spawn's
+    // agent (the request's `agent_name`, else parsed from the command) so EVERY
+    // detached spawn is caged identically — never silently uncaged when the user
+    // enabled the cage.
+    if opts.cage_wrapper.is_none() {
+        let agent = opts
+            .agent_name
+            .clone()
+            .unwrap_or_else(|| job_name_for_command(&command));
+        if let Some((cage_bin, policy_path)) = orkia_shell::resolve_detached_cage(config, &agent) {
+            opts.cage_wrapper = Some(protocol::CageWrapperProto {
+                cage_bin,
+                policy_path,
+            });
+        }
+    }
     let id = match state.alloc_id() {
         Ok(id) => id,
         Err(err) => {

@@ -77,12 +77,12 @@ pub(super) fn start(
 ) -> Result<TerminalEngine, String> {
     let (cols, rows) = resolve_dims(opts.terminal_cols, opts.terminal_rows);
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
-    let (exec_cmd, exec_args) = build_argv(
-        &exe.display().to_string(),
-        command,
-        opts.args,
-        opts.cage_wrapper,
-    );
+    // The detached RUNTIME must NEVER be caged: it needs `~/.orkia` (control
+    // socket, SEAL chains, job state), which a workspace-scoped Seatbelt profile
+    // denies. The cage applies to the AGENT the runtime spawns in-process; the
+    // wrapper spec rides the env so the runtime resolves it deterministically
+    // (it does not reliably re-derive `[cage]` from its own config).
+    let (exec_cmd, exec_args) = build_argv(&exe.display().to_string(), command, opts.args);
     let env = build_env(
         config,
         id,
@@ -90,6 +90,7 @@ pub(super) fn start(
         opts.agent_name,
         opts.extra_env,
         opts.osc133,
+        opts.cage_wrapper,
     );
     let cwd = opts.working_dir.or_else(|| std::env::current_dir().ok());
 
@@ -124,35 +125,18 @@ fn resolve_dims(cols: Option<usize>, rows: Option<usize>) -> (usize, usize) {
     }
 }
 
-/// Build `(exec_cmd, argv)`. Without a cage wrapper this is the
-/// orkia binary with `["-c", detached_runtime_command(command)]`
-/// (today's hardcoded path). With explicit args (non-empty) those
-/// replace the default `["-c", …]` but are still optionally wrapped.
-fn build_argv(
-    exe: &str,
-    command: &str,
-    args: Vec<String>,
-    cage_wrapper: Option<CageWrapperProto>,
-) -> (String, Vec<String>) {
+/// Build `(exec_cmd, argv)` for the detached runtime: the orkia binary with
+/// `["-c", detached_runtime_command(command)]` (the hardcoded path), or explicit
+/// `args` when non-empty. The runtime is never cage-wrapped here — caging is the
+/// agent's, applied by the runtime's own in-process spawn (see `build_env`).
+fn build_argv(exe: &str, command: &str, args: Vec<String>) -> (String, Vec<String>) {
     let base_cmd = exe.to_string();
     let base_args = if args.is_empty() {
         vec!["-c".to_string(), detached_runtime_command(command)]
     } else {
         args
     };
-
-    match cage_wrapper {
-        None => (base_cmd, base_args),
-        Some(w) => {
-            let mut wrapped = Vec::with_capacity(base_args.len() + 4);
-            wrapped.push("--policy".to_string());
-            wrapped.push(w.policy_path);
-            wrapped.push("--".to_string());
-            wrapped.push(base_cmd);
-            wrapped.extend(base_args);
-            (w.cage_bin, wrapped)
-        }
-    }
+    (base_cmd, base_args)
 }
 
 fn build_env(
@@ -162,6 +146,7 @@ fn build_env(
     agent_name: Option<String>,
     extra_env: Vec<(String, String)>,
     osc133: bool,
+    cage_wrapper: Option<CageWrapperProto>,
 ) -> Vec<(String, String)> {
     // Hardcoded block — always present (today's behaviour).
     let mut env = vec![
@@ -187,6 +172,13 @@ fn build_env(
 
     if let Some(name) = agent_name {
         env.push(("ORKIA_AGENT_NAME".to_string(), name));
+    }
+
+    // The REPL's resolved cage, threaded so the runtime wraps the AGENT it spawns
+    // (not itself) — `Repl::cage_wrapper` honors these over re-deriving config.
+    if let Some(cw) = cage_wrapper {
+        env.push(("ORKIA_DETACHED_CAGE_BIN".to_string(), cw.cage_bin));
+        env.push(("ORKIA_DETACHED_CAGE_POLICY".to_string(), cw.policy_path));
     }
 
     // Caller-supplied extras last so they can override anything above.
