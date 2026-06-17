@@ -40,6 +40,7 @@
 
 pub mod compose;
 pub mod issues;
+mod oracle;
 mod run;
 pub mod seal;
 pub mod spawn;
@@ -57,7 +58,7 @@ use orkia_shell_types::{DaemonJobs, DetachedSpawner, FinalResponseSource, Kernel
 use sha2::{Digest, Sha256};
 
 use crate::issues::{Issue, IssueMeta, IssueStore, RunMeta, Status, title_from_body};
-use crate::run::{Driver, DriverConfig, ProxyMsg, run_actor};
+use crate::run::{AcceptSpec, Driver, DriverConfig, ProxyMsg, run_actor};
 
 pub use compose::{DepContext, compose_body};
 pub use seal::{DispatchSeal, DispatchSealRecord};
@@ -93,6 +94,11 @@ pub struct DispatchTaskSpec {
     pub agent: String,
     pub body: String,
     pub depends_on: Vec<String>,
+    /// Acceptance oracle command (SPEC-CONVERGENCE-LOOP-V1). `None` → no
+    /// convergence loop. Proxy-local: never sent to the kernel.
+    pub accept: Option<String>,
+    /// Max convergence attempts when `accept` is set (`None`/`<=1` → one shot).
+    pub max_attempts: Option<usize>,
 }
 
 /// A whole dispatch run the command surface asks the proxy to start.
@@ -316,6 +322,8 @@ impl KernelDispatchProxy {
                         job_id: None,
                         response_sha: None,
                         seal: None,
+                        attempt: 0,
+                        verdict_seal: None,
                     },
                     prompt: spec.body.clone(),
                     response: None,
@@ -328,6 +336,23 @@ impl KernelDispatchProxy {
     /// Build the driver, wire the fan-in subscription, and start the actor.
     fn launch(&self, req: DispatchRequest, run_id: String, wave: Vec<TaskPlan>) -> RunHandle {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // Proxy-local acceptance specs (SPEC-CONVERGENCE-LOOP-V1): built from the
+        // RFC frontmatter, keyed by task id; never sent to the kernel.
+        let accept_specs = req
+            .tasks
+            .iter()
+            .filter_map(|t| {
+                t.accept.as_ref().map(|cmd| {
+                    (
+                        t.id.clone(),
+                        AcceptSpec {
+                            command: cmd.clone(),
+                            max_attempts: t.max_attempts.unwrap_or(1).max(1) as u32,
+                        },
+                    )
+                })
+            })
+            .collect();
         let driver = Driver::new(DriverConfig {
             kernel: Arc::clone(&self.kernel),
             spawner: Arc::clone(&self.spawner),
@@ -339,6 +364,8 @@ impl KernelDispatchProxy {
             rfc_dir: req.rfc_dir,
             working_dir: req.working_dir,
             clock: Arc::clone(&self.clock),
+            accept_specs,
+            verdict_tx: tx.clone(),
         });
         let sink = tx.clone();
         self.responses.subscribe(Arc::new(move |ev| {

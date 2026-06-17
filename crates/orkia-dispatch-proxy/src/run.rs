@@ -58,6 +58,14 @@ pub(crate) enum ProxyMsg {
     /// A final response landed for *some* job. It may not be ours — the
     /// subscription is shell-global — so the actor filters by its fan-in map.
     Response(FinalResponseEvent),
+    /// An acceptance oracle finished off-actor (SPEC-CONVERGENCE-LOOP-V1). The
+    /// actor decides: pass → advance(Done); fail+retry → re-spawn self-repair;
+    /// fail+exhausted → advance(Failed).
+    Verdict {
+        task_id: String,
+        attempt: u32,
+        result: crate::oracle::AcceptanceResult,
+    },
     /// The run was cancelled out-of-band (user `Ctrl-C` / `kill`).
     Abort,
 }
@@ -82,6 +90,16 @@ enum Step {
 enum Advanced {
     Wave(Vec<TaskPlan>),
     Stop,
+}
+
+/// One task's acceptance oracle (SPEC-CONVERGENCE-LOOP-V1). Proxy-local: built
+/// from the RFC frontmatter, never sent to the kernel.
+#[derive(Clone)]
+pub(crate) struct AcceptSpec {
+    /// The `accept` command (`exit 0` ⇒ the task succeeded).
+    pub command: String,
+    /// Total attempts allowed (≥ 1). `1` = a single shot (no retry).
+    pub max_attempts: u32,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -120,6 +138,12 @@ pub(crate) struct DriverConfig {
     /// Timestamp source, seam-injected so tests are deterministic. Stamps each
     /// sealed output's `ts`.
     pub clock: Clock,
+    /// Per-task acceptance specs (SPEC-CONVERGENCE-LOOP-V1), keyed by task id.
+    /// Empty ⇒ no convergence loop (every task is one-shot).
+    pub accept_specs: HashMap<String, AcceptSpec>,
+    /// Sender into the actor's own channel, so an off-actor oracle thread can
+    /// post its [`ProxyMsg::Verdict`] back to the actor.
+    pub verdict_tx: tokio::sync::mpsc::UnboundedSender<ProxyMsg>,
 }
 
 /// Single owner of one run's mutable state.
@@ -138,6 +162,10 @@ pub(crate) struct Driver {
     working_dir: Option<String>,
     /// `job_id → task_id`: routes a global final-response back to its task.
     job_to_task: HashMap<u32, String>,
+    /// Per-task acceptance oracles (SPEC-CONVERGENCE-LOOP-V1).
+    accept_specs: HashMap<String, AcceptSpec>,
+    /// Back-channel for off-actor oracle threads.
+    verdict_tx: tokio::sync::mpsc::UnboundedSender<ProxyMsg>,
 }
 
 impl Driver {
@@ -157,6 +185,8 @@ impl Driver {
             project: cfg.project,
             working_dir: cfg.working_dir,
             job_to_task: HashMap::new(),
+            accept_specs: cfg.accept_specs,
+            verdict_tx: cfg.verdict_tx,
         }
     }
 
@@ -192,12 +222,31 @@ impl Driver {
                     Ok(Step::Continue)
                 }
                 Status::Spawned => self.reconcile_spawned(plan, issue),
-                Status::Done => {
+                // Resume safety (SPEC-CONVERGENCE-LOOP-V1, Phase 6): the response
+                // was captured but the oracle verdict never landed before the
+                // restart — re-run the oracle (idempotent), don't advance yet.
+                Status::Verifying if self.accept_specs.contains_key(&plan.task_id) => {
+                    self.launch_oracle(&plan.task_id)?;
+                    Ok(Step::Continue)
+                }
+                // A `Verifying` task whose `accept` was removed since the run
+                // started: treat the captured output as done (nothing to verify).
+                Status::Verifying => {
+                    let outcome = done_outcome(&self.store, &issue);
+                    self.fast_forward(&plan.task_id, outcome)
+                }
+                // Terminal success: a no-oracle finish (`Done`) or a passed
+                // oracle (`Verified`) both report `Done` to the kernel.
+                Status::Done | Status::Verified => {
                     let outcome = done_outcome(&self.store, &issue);
                     self.fast_forward(&plan.task_id, outcome)
                 }
                 Status::Failed => {
                     let reason = issue.response.unwrap_or_else(|| "failed".into());
+                    self.fast_forward(&plan.task_id, TaskOutcome::Failed { reason })
+                }
+                Status::Rejected => {
+                    let reason = "acceptance oracle rejected after max attempts".into();
                     self.fast_forward(&plan.task_id, TaskOutcome::Failed { reason })
                 }
             },
@@ -220,6 +269,11 @@ impl Driver {
                 working_dir: self.working_dir.clone(),
                 agent_name: Some(plan.agent.clone()),
                 extra_env: Vec::new(),
+                // Left None here: the daemon's `handle_spawn` resolves the cage
+                // from its `[cage]` config + this request's `agent_name`, so an
+                // RFC-dispatched task is caged identically to a REPL `@agent`
+                // spawn without the proxy carrying a cage resolver of its own.
+                cage_wrapper: None,
             })
             .map_err(|reason| DriverError::Spawn {
                 task_id: plan.task_id.clone(),
@@ -235,6 +289,8 @@ impl Driver {
                 job_id: Some(job_id),
                 response_sha: None,
                 seal: None,
+                attempt: 0,
+                verdict_seal: None,
             },
             prompt: composed,
             response: None,
@@ -320,10 +376,173 @@ impl Driver {
         ev: &FinalResponseEvent,
     ) -> Result<Flow, DriverError> {
         let outcome = self.absorb(task_id, ev)?;
+        // Convergence gate (SPEC-CONVERGENCE-LOOP-V1): a finished task WITH an
+        // acceptance oracle defers the kernel `advance` until the oracle verdict
+        // (run off-actor; returns as `ProxyMsg::Verdict`). A `Failed` outcome
+        // (the agent produced no response) skips the oracle and advances now.
+        if matches!(outcome, TaskOutcome::Done { .. }) && self.accept_specs.contains_key(task_id) {
+            self.launch_oracle(task_id)?;
+            return Ok(Flow::Continue);
+        }
+        self.advance_into_flow(task_id, outcome)
+    }
+
+    /// Report an outcome to the kernel and turn its verdict into actor flow.
+    fn advance_into_flow(
+        &mut self,
+        task_id: &str,
+        outcome: TaskOutcome,
+    ) -> Result<Flow, DriverError> {
         match self.advance(task_id, outcome)? {
             Advanced::Stop => Ok(Flow::Done),
             Advanced::Wave(wave) => self.process_wave(wave),
         }
+    }
+
+    /// Read a task's issue or fail closed (it must exist by the time we react
+    /// to its response/verdict).
+    fn read_issue(&self, task_id: &str) -> Result<Issue, DriverError> {
+        self.store
+            .read(task_id)?
+            .ok_or_else(|| DriverError::Spawn {
+                task_id: task_id.to_string(),
+                reason: "issue vanished before its verdict".into(),
+            })
+    }
+
+    /// Flip a finished task to `Verifying` and run its `accept` oracle on a
+    /// dedicated thread (it may take minutes; the actor must stay responsive).
+    /// The result comes back as [`ProxyMsg::Verdict`].
+    fn launch_oracle(&mut self, task_id: &str) -> Result<(), DriverError> {
+        // Callers guarantee the spec exists; if it somehow doesn't there is
+        // nothing to verify, so return without spawning (fail-soft, no panic).
+        let Some(spec) = self.accept_specs.get(task_id).cloned() else {
+            return Ok(());
+        };
+        let mut issue = self.read_issue(task_id)?;
+        issue.meta.status = Status::Verifying;
+        self.store.write(&issue)?;
+        let attempt = issue.meta.attempt;
+        let working_dir = self.working_dir.clone();
+        let tx = self.verdict_tx.clone();
+        let tid = task_id.to_string();
+        std::thread::spawn(move || {
+            let result = crate::oracle::run_acceptance(&spec.command, working_dir.as_deref());
+            let _ = tx.send(ProxyMsg::Verdict {
+                task_id: tid,
+                attempt,
+                result,
+            });
+        });
+        Ok(())
+    }
+
+    /// An acceptance oracle finished. Seal the verdict, then: pass → `Verified` +
+    /// advance `Done`; fail with attempts left → re-spawn self-repair; fail
+    /// exhausted → `Rejected` + advance `Failed`. The kernel sees exactly one
+    /// outcome per task (after convergence), so retries never reach it.
+    fn on_verdict(
+        &mut self,
+        task_id: &str,
+        attempt: u32,
+        result: crate::oracle::AcceptanceResult,
+    ) -> Flow {
+        match self.handle_verdict(task_id, attempt, result) {
+            Ok(flow) => flow,
+            Err(e) => self.teardown(&format!("verdict `{task_id}`: {e}")),
+        }
+    }
+
+    fn handle_verdict(
+        &mut self,
+        task_id: &str,
+        attempt: u32,
+        result: crate::oracle::AcceptanceResult,
+    ) -> Result<Flow, DriverError> {
+        let Some(spec) = self.accept_specs.get(task_id).cloned() else {
+            return Ok(Flow::Continue); // not an accept task — nothing to do
+        };
+        let mut issue = self.read_issue(task_id)?;
+        // A verdict for a superseded attempt (a later retry already ran) is
+        // stale — ignore it rather than double-advance.
+        if issue.meta.attempt != attempt {
+            return Ok(Flow::Continue);
+        }
+        let seal_hash = self
+            .seal
+            .seal_verdict(
+                task_id,
+                &issue.meta.agent,
+                attempt,
+                &spec.command,
+                result.exit_code,
+                result.passed(),
+                &(self.clock)(),
+            )
+            .map_err(|source| DriverError::Seal {
+                task_id: task_id.to_string(),
+                source,
+            })?;
+        issue.meta.verdict_seal = Some(seal_hash);
+
+        if result.passed() {
+            issue.meta.status = Status::Verified;
+            self.store.write(&issue)?;
+            let outcome = done_outcome(&self.store, &issue);
+            self.advance_into_flow(task_id, outcome)
+        } else if attempt + 1 < spec.max_attempts {
+            self.store.write(&issue)?; // persist the verdict seal before re-spawn
+            self.retry_task(task_id, issue, &spec.command, &result.output_tail)?;
+            Ok(Flow::Continue)
+        } else {
+            issue.meta.status = Status::Rejected;
+            self.store.write(&issue)?;
+            let reason = format!(
+                "acceptance `{}` failed after {} attempt(s) (exit {})",
+                spec.command,
+                attempt + 1,
+                result.exit_code
+            );
+            self.advance_into_flow(task_id, TaskOutcome::Failed { reason })
+        }
+    }
+
+    /// Re-spawn a task for another attempt with a self-repair prompt built from
+    /// the failing acceptance output. The prior job already finished (its
+    /// response was absorbed), so there is no orphan — this is a fresh job in
+    /// the same workspace, which sees the previous attempt's changes.
+    fn retry_task(
+        &mut self,
+        task_id: &str,
+        mut issue: Issue,
+        accept_command: &str,
+        output_tail: &str,
+    ) -> Result<(), DriverError> {
+        let next_attempt = issue.meta.attempt + 1;
+        let body = compose_retry_body(&issue.prompt, accept_command, output_tail, next_attempt);
+        let command = task_command_line(&self.rfc_id, task_id, &issue.meta.agent, &self.project);
+        let job_id = self
+            .spawner
+            .spawn_detached(DetachedSpawnRequest {
+                command,
+                working_dir: self.working_dir.clone(),
+                agent_name: Some(issue.meta.agent.clone()),
+                extra_env: Vec::new(),
+                cage_wrapper: None,
+            })
+            .map_err(|reason| DriverError::Spawn {
+                task_id: task_id.to_string(),
+                reason,
+            })?;
+        issue.meta.attempt = next_attempt;
+        issue.meta.status = Status::Spawned;
+        issue.meta.job_id = Some(job_id);
+        issue.meta.response_sha = None;
+        issue.prompt = body;
+        issue.response = None;
+        self.store.write(&issue)?;
+        self.job_to_task.insert(job_id, task_id.to_string());
+        Ok(())
     }
 
     /// Fold a finished job into its issue and derive the outcome to report. A
@@ -475,6 +694,24 @@ impl Driver {
     }
 }
 
+/// Build a self-repair prompt for a retry (SPEC-CONVERGENCE-LOOP-V1, Phase 5):
+/// the prior prompt plus the failing acceptance command and its (bounded)
+/// output, so the agent fixes the cause rather than starting blind.
+fn compose_retry_body(
+    prior_prompt: &str,
+    accept_command: &str,
+    output_tail: &str,
+    attempt: u32,
+) -> String {
+    format!(
+        "{prior_prompt}\n\n\
+         ---\n\
+         Attempt {attempt}: the acceptance check `{accept_command}` failed. Its output was:\n\
+         ```\n{output_tail}\n```\n\
+         Fix the underlying cause so `{accept_command}` passes, then stop."
+    )
+}
+
 /// Synthesize the `Done` outcome for a task recovered from disk on resume: the
 /// kernel only needs to know it finished (to release dependents), so the ref
 /// points at the issue file and sizes by the embedded response.
@@ -532,6 +769,11 @@ pub(crate) fn run_actor(
     while let Some(msg) = rx.blocking_recv() {
         let flow = match msg {
             ProxyMsg::Response(ev) => driver.on_response(ev),
+            ProxyMsg::Verdict {
+                task_id,
+                attempt,
+                result,
+            } => driver.on_verdict(&task_id, attempt, result),
             ProxyMsg::Abort => driver.on_abort(),
         };
         if matches!(flow, Flow::Done) {

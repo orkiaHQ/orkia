@@ -141,6 +141,8 @@ impl Repl {
                 agent: t.agent,
                 body: t.body,
                 depends_on: t.depends_on,
+                accept: t.accept,
+                max_attempts: t.max_attempts,
             })
             .collect();
         Ok(DispatchRequest {

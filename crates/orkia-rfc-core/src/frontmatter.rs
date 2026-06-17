@@ -136,6 +136,17 @@ pub struct DispatchTaskBlock {
     pub body: String,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Acceptance oracle (SPEC-CONVERGENCE-LOOP-V1): a shell command whose
+    /// `exit 0` means the task actually succeeded (e.g. `cargo test -p auth`).
+    /// `None` → no convergence loop (the task is `done` on finish, one shot).
+    /// Carried verbatim; the OSS proxy runs it and never sends it to the brain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept: Option<String>,
+    /// Max attempts for the convergence loop when `accept` is set. `None`/`0`/`1`
+    /// → a single shot (no retry). The proxy re-spawns with a self-repair prompt
+    /// up to this bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<usize>,
 }
 
 fn dispatch_default_strategy() -> String {
@@ -479,6 +490,9 @@ body = \"Do the thing.\"\n\
                 agent: "faye".into(),
                 body: "go".into(),
                 depends_on: vec![],
+                // Exercise the convergence-loop fields' round-trip (V1).
+                accept: Some("cargo test -p x".into()),
+                max_attempts: Some(3),
             }],
         });
         let rendered = render_frontmatter(&fm, "body\n").expect("render");

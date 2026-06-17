@@ -50,6 +50,12 @@ pub enum DecisionKind {
     /// SEAL-chain record; the chain is the tamper-evident audit anchor the
     /// task's issue file points into (issues stay the source of truth).
     DispatchOutput,
+    /// One dispatch task's acceptance-oracle verdict (SPEC-CONVERGENCE-LOOP-V1):
+    /// did the task actually *succeed* (the `accept` command's exit code), per
+    /// attempt. Sealed into the same dispatch chain, interleaved with the
+    /// `DispatchOutput` records, so a verifier reconstructs the convergence
+    /// (failed attempts included), tamper-evident.
+    AcceptanceVerdict,
 }
 
 impl DecisionKind {
@@ -62,6 +68,7 @@ impl DecisionKind {
             Self::DesignProposed => "design_proposed",
             Self::DesignReviewed => "design_reviewed",
             Self::DispatchOutput => "dispatch_output",
+            Self::AcceptanceVerdict => "acceptance_verdict",
         }
     }
 }

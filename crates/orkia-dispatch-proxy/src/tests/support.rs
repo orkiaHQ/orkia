@@ -319,7 +319,36 @@ pub(crate) fn task(id: &str, agent: &str, deps: &[&str]) -> DispatchTaskSpec {
         agent: agent.into(),
         body: format!("do {id}"),
         depends_on: deps.iter().map(|s| s.to_string()).collect(),
+        accept: None,
+        max_attempts: None,
     }
+}
+
+/// A task with an acceptance oracle (SPEC-CONVERGENCE-LOOP-V1).
+pub(crate) fn task_with_accept(
+    id: &str,
+    agent: &str,
+    deps: &[&str],
+    accept: &str,
+    max_attempts: usize,
+) -> DispatchTaskSpec {
+    DispatchTaskSpec {
+        accept: Some(accept.into()),
+        max_attempts: Some(max_attempts),
+        ..task(id, agent, deps)
+    }
+}
+
+/// The attempt index recorded on a task's issue.
+pub(crate) fn attempt_is(rfc_dir: &Path, id: &str, want: u32) -> bool {
+    read_issue(rfc_dir, id).map(|i| i.meta.attempt) == Some(want)
+}
+
+/// The dispatch SEAL chain records for assertions.
+pub(crate) fn seal_records(rfc_dir: &Path) -> Vec<crate::seal::DispatchSealRecord> {
+    crate::seal::DispatchSeal::new(rfc_dir)
+        .records()
+        .unwrap_or_default()
 }
 
 /// Poll until `f` is true or the deadline elapses. Returns whether it passed.
@@ -386,6 +415,8 @@ pub(crate) fn seed_issue(
                 job_id,
                 response_sha: None,
                 seal: None,
+                attempt: 0,
+                verdict_seal: None,
             },
             prompt: format!("do {id}"),
             response: response.map(str::to_string),

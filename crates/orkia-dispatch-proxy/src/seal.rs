@@ -64,11 +64,14 @@ impl SealError {
     }
 }
 
-/// One sealed dispatch-task output. Serialized as a single NDJSON line.
+/// One sealed dispatch record. Serialized as a single NDJSON line. `kind`
+/// discriminates the shape: a [`DecisionKind::DispatchOutput`] carries
+/// `response_*`; a [`DecisionKind::AcceptanceVerdict`] carries the verdict
+/// fields (`attempt`/`exit_code`/`passed`/`accept_command`). Both share the
+/// chain so a verifier reconstructs the convergence in order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchSealRecord {
-    /// Always [`DecisionKind::DispatchOutput`]; carried so the chain is
-    /// self-describing and future kinds can share the file.
+    /// [`DecisionKind::DispatchOutput`] or [`DecisionKind::AcceptanceVerdict`].
     pub kind: DecisionKind,
     pub ts: String,
     pub task_id: String,
@@ -77,7 +80,22 @@ pub struct DispatchSealRecord {
     /// final-response sha). `None` only if the agent produced no output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub response_sha256: Option<String>,
+    /// Output records only; empty on a verdict record.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub response_path: String,
+    // ── AcceptanceVerdict-only fields (all None/absent on an output record) ──
+    /// Zero-based attempt this verdict judged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attempt: Option<u32>,
+    /// Exit code of the `accept` command (`0` ⇒ passed).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Whether the oracle passed (`exit_code == 0`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passed: Option<bool>,
+    /// The acceptance command that produced this verdict.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accept_command: Option<String>,
     pub prev_hash: String,
     pub hash: String,
 }
@@ -91,6 +109,29 @@ fn compute_hash(prev_hash: &str, task_id: &str, sha: &str, path: &str, ts: &str)
     h.update(task_id.as_bytes());
     h.update(sha.as_bytes());
     h.update(path.as_bytes());
+    h.update(ts.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// SHA-256 over an [`DecisionKind::AcceptanceVerdict`] record's linked fields.
+/// `prev_hash` first (tamper-evident ordering), then the verdict payload.
+fn compute_verdict_hash(
+    prev_hash: &str,
+    task_id: &str,
+    attempt: u32,
+    exit_code: i32,
+    passed: bool,
+    command: &str,
+    ts: &str,
+) -> String {
+    let mut h = Sha256::new();
+    h.update(prev_hash.as_bytes());
+    h.update(DecisionKind::AcceptanceVerdict.as_str().as_bytes());
+    h.update(task_id.as_bytes());
+    h.update(attempt.to_le_bytes());
+    h.update(exit_code.to_le_bytes());
+    h.update([passed as u8]);
+    h.update(command.as_bytes());
     h.update(ts.as_bytes());
     hex::encode(h.finalize())
 }
@@ -136,6 +177,54 @@ impl DispatchSeal {
             agent: agent.to_string(),
             response_sha256: response_sha256.map(str::to_string),
             response_path: response_path.to_string(),
+            attempt: None,
+            exit_code: None,
+            passed: None,
+            accept_command: None,
+            prev_hash,
+            hash: hash.clone(),
+        };
+        self.append(&record)?;
+        Ok(hash)
+    }
+
+    /// Seal one task's acceptance-oracle verdict (SPEC-CONVERGENCE-LOOP-V1),
+    /// returning the record `hash` (stamped into `IssueMeta::verdict_seal`).
+    /// Chains onto the current tip exactly like [`seal_output`]; interleaved
+    /// with output records so the convergence (failed attempts included) is
+    /// reconstructable. Fail-closed on read/parse/write error.
+    #[allow(clippy::too_many_arguments)]
+    pub fn seal_verdict(
+        &self,
+        task_id: &str,
+        agent: &str,
+        attempt: u32,
+        accept_command: &str,
+        exit_code: i32,
+        passed: bool,
+        ts: &str,
+    ) -> Result<String, SealError> {
+        let prev_hash = self.tip()?.unwrap_or_else(|| ZERO_HASH.to_string());
+        let hash = compute_verdict_hash(
+            &prev_hash,
+            task_id,
+            attempt,
+            exit_code,
+            passed,
+            accept_command,
+            ts,
+        );
+        let record = DispatchSealRecord {
+            kind: DecisionKind::AcceptanceVerdict,
+            ts: ts.to_string(),
+            task_id: task_id.to_string(),
+            agent: agent.to_string(),
+            response_sha256: None,
+            response_path: String::new(),
+            attempt: Some(attempt),
+            exit_code: Some(exit_code),
+            passed: Some(passed),
+            accept_command: Some(accept_command.to_string()),
             prev_hash,
             hash: hash.clone(),
         };
@@ -168,8 +257,22 @@ impl DispatchSeal {
             if r.prev_hash != prev {
                 return Ok(false);
             }
-            let sha = r.response_sha256.as_deref().unwrap_or("");
-            if compute_hash(&r.prev_hash, &r.task_id, sha, &r.response_path, &r.ts) != r.hash {
+            let recomputed = match r.kind {
+                DecisionKind::AcceptanceVerdict => compute_verdict_hash(
+                    &r.prev_hash,
+                    &r.task_id,
+                    r.attempt.unwrap_or(0),
+                    r.exit_code.unwrap_or(0),
+                    r.passed.unwrap_or(false),
+                    r.accept_command.as_deref().unwrap_or(""),
+                    &r.ts,
+                ),
+                _ => {
+                    let sha = r.response_sha256.as_deref().unwrap_or("");
+                    compute_hash(&r.prev_hash, &r.task_id, sha, &r.response_path, &r.ts)
+                }
+            };
+            if recomputed != r.hash {
                 return Ok(false);
             }
             prev = &r.hash;
@@ -295,5 +398,47 @@ mod tests {
         assert_eq!(recs[0].response_sha256, None);
         assert_eq!(recs[0].hash, h);
         assert!(s.verify().unwrap());
+    }
+
+    #[test]
+    fn verdict_records_interleave_with_output_and_verify() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = seal(tmp.path());
+        // The convergence shape: output(attempt 0) → verdict(fail) →
+        // output(attempt 1) → verdict(pass).
+        s.seal_output("impl", "faye", Some("aaaa"), "issues/impl.md", "t1")
+            .unwrap();
+        let v0 = s
+            .seal_verdict("impl", "faye", 0, "cargo test", 1, false, "t2")
+            .unwrap();
+        s.seal_output("impl", "faye", Some("bbbb"), "issues/impl.md", "t3")
+            .unwrap();
+        let v1 = s
+            .seal_verdict("impl", "faye", 1, "cargo test", 0, true, "t4")
+            .unwrap();
+        let recs = s.records().unwrap();
+        assert_eq!(recs.len(), 4);
+        assert_eq!(recs[1].kind, DecisionKind::AcceptanceVerdict);
+        assert_eq!(recs[1].hash, v0);
+        assert_eq!(recs[1].attempt, Some(0));
+        assert_eq!(recs[1].passed, Some(false));
+        assert_eq!(recs[1].exit_code, Some(1));
+        assert_eq!(recs[3].hash, v1);
+        assert_eq!(recs[3].passed, Some(true));
+        assert!(s.verify().unwrap()); // mixed-kind chain verifies
+    }
+
+    #[test]
+    fn tampered_verdict_breaks_verify() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = seal(tmp.path());
+        s.seal_verdict("impl", "faye", 0, "cargo test", 1, false, "t1")
+            .unwrap();
+        // Flip `passed` true without recomputing the hash → chain invalid.
+        let raw = fs::read_to_string(s.path()).unwrap();
+        let mut rec: DispatchSealRecord = serde_json::from_str(raw.trim()).unwrap();
+        rec.passed = Some(true);
+        fs::write(s.path(), format!("{}\n", serde_json::to_string(&rec).unwrap())).unwrap();
+        assert!(!s.verify().unwrap());
     }
 }

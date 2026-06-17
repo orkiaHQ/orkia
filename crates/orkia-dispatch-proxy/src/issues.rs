@@ -48,6 +48,13 @@ pub enum Status {
     Done,
     /// Failed (no response, unreadable output, or lost on restart).
     Failed,
+    /// (Convergence loop) Response captured + sealed, the acceptance oracle is
+    /// pending. Transient: a resume re-runs the oracle (idempotent).
+    Verifying,
+    /// (Convergence loop) Acceptance oracle passed (`accept` exit 0).
+    Verified,
+    /// (Convergence loop) Acceptance oracle failed after `max_attempts`.
+    Rejected,
 }
 
 /// The `+++` frontmatter of one issue.
@@ -69,6 +76,20 @@ pub struct IssueMeta {
     /// ([`crate::seal::DispatchSeal`]). `None` until the task finishes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seal: Option<String>,
+    /// (Convergence loop, SPEC-CONVERGENCE-LOOP-V1) Zero-based attempt index for
+    /// a task with an `accept` oracle: `0` on first run, incremented per retry.
+    /// Omitted from the frontmatter when `0` (the common, no-retry case).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub attempt: u32,
+    /// Dispatch SEAL-chain hash of this task's latest `AcceptanceVerdict` record
+    /// (the convergence verdict, distinct from `seal` which anchors the output).
+    /// `None` for tasks without an `accept` oracle.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict_seal: Option<String>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// A whole issue: its frontmatter, the composed prompt, and (once finished)
@@ -82,7 +103,7 @@ pub struct Issue {
 
 impl Issue {
     pub fn is_done(&self) -> bool {
-        matches!(self.meta.status, Status::Done)
+        matches!(self.meta.status, Status::Done | Status::Verified)
     }
 }
 
@@ -312,6 +333,8 @@ mod tests {
             job_id: Some(7),
             response_sha: None,
             seal: None,
+            attempt: 0,
+            verdict_seal: None,
         }
     }
 

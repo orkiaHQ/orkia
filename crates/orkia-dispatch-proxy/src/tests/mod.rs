@@ -13,6 +13,7 @@
 //! * [`fresh`] — a clean run from `start_run`.
 //! * [`resume`] — reconstruction from `resume_run` (`SPEC` §4.3 / step 5.D).
 
+mod convergence;
 mod fresh;
 mod resume;
 mod support;
