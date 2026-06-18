@@ -112,8 +112,8 @@ impl Repl {
             }
         } else {
             // Decline path: write a small but USEFUL `.orkiarc` so the
-            // user is not stranded without their dev tools when bashrc
-            // .orkiarc exists."
+            // user is not stranded without their dev tools when
+            // load_bashrc=false and no .orkiarc exists yet.
             let stub = format!(
                 "# ~/.orkiarc — first-run setup declined ({today}).\n\
                  # Full bash syntax. Edit freely.\n\

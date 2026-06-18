@@ -122,6 +122,7 @@ pub struct ClassCaps {
 ///
 /// `network` is intentionally absent in V1: network namespaces are out of
 /// scope, so the policy declares no bound the cage cannot enforce. Add it when
+/// network isolation becomes enforceable.
 ///
 /// Field order is deliberate: the scalar `default_verdict` precedes the `caps`,
 /// `workspace`, and `capabilities` tables/arrays-of-tables so TOML
@@ -160,7 +161,7 @@ impl Policy {
     /// - capabilities are evaluated in declaration order; the first capability
     ///   with any matching pattern wins.
     ///
-    /// The returned [`PolicyDecision`] names which rule fired (`rule`) for audit
+    /// The returned [`PolicyDecision`] names which rule fired (`rule`) for auditing.
     ///
     /// A command line may chain several simple commands with shell operators
     /// (`&&`, `||`, `;`, `|`, `&`). Matching the whole string against one glob
