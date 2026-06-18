@@ -729,7 +729,7 @@ impl Driver {
             return FleetStep::Stop("oscillating: integration failure unchanged".to_string());
         }
         self.last_fail_sig = Some(sig);
-        self.replan()
+        self.replan(result.output_tail)
     }
 
     /// Tell the kernel the run converged so it drops the kept-alive run (V2 inc
@@ -740,6 +740,7 @@ impl Driver {
             run_id: self.run_id.clone(),
             passed: true,
             round: self.round,
+            failure_tail: None,
         });
     }
 
@@ -748,11 +749,12 @@ impl Driver {
     /// run_id). Fall back to re-authorizing the whole DAG (the OSS trivial
     /// brain) when the kernel lacks the finalize RPC. Either way `round`
     /// advances and a `ReplanDecision` is sealed.
-    fn replan(&mut self) -> FleetStep {
+    fn replan(&mut self, failure_tail: String) -> FleetStep {
         let finalize = self.kernel.dispatch_finalize(DispatchFinalizeRequest {
             run_id: self.run_id.clone(),
             passed: false,
             round: self.round,
+            failure_tail: Some(failure_tail),
         });
         match finalize {
             Ok(DispatchFinalizeResponse::Replan { wave }) => {

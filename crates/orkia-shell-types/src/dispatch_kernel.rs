@@ -214,6 +214,12 @@ pub struct DispatchFinalizeRequest {
     pub passed: bool,
     /// The fleet round being finalized (`0` = first integration pass).
     pub round: u32,
+    /// On failure, the tail of the integration command's output. Fuel for the
+    /// premium brain's model-ATTRIBUTED targeting (which task caused it); the
+    /// brain falls back to the leaf heuristic when this is absent or
+    /// inconclusive. `None`/empty on a passing round.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_tail: Option<String>,
 }
 
 /// Result of [`METHOD_FINALIZE`].
