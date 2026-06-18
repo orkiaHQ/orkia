@@ -229,9 +229,16 @@ pub enum DispatchFinalizeResponse {
     /// Integration passed: the run is converged and the kernel dropped it.
     Converged,
     /// Integration failed: re-run this TARGETED wave (the brain re-opened a
-    /// subgraph). The shell drives it like any other wave; on the next drain it
-    /// finalizes again.
-    Replan { wave: Vec<TaskPlan> },
+    /// subgraph). The shell drives `wave` like any other wave; on the next drain
+    /// it finalizes again. `reopened` is the FULL set of re-opened task ids
+    /// (the wave plus its downstream dependents released in later waves) — the
+    /// shell must reset every one to `Pending` so dependents actually re-run
+    /// instead of fast-forwarding their stale output.
+    Replan {
+        wave: Vec<TaskPlan>,
+        #[serde(default)]
+        reopened: Vec<String>,
+    },
     /// The brain declines to re-plan (nothing actionable to re-open): stop.
     GiveUp { reason: String },
     /// Unknown / already-closed `run_id`. Fail-closed: the shell falls back to

@@ -123,7 +123,10 @@ impl KernelRpc for FakeKernel {
         // A "premium" brain re-opens the configured targeted wave; otherwise
         // Unavailable, so the proxy falls back to re-authorize-all.
         match self.finalize_wave.lock().unwrap().clone() {
-            Some(wave) => Ok(DispatchFinalizeResponse::Replan { wave }),
+            Some(wave) => {
+                let reopened = wave.iter().map(|p| p.task_id.clone()).collect();
+                Ok(DispatchFinalizeResponse::Replan { wave, reopened })
+            }
             None => Err(KernelRpcError::Unavailable("no finalize in this fake".into())),
         }
     }

@@ -757,14 +757,16 @@ impl Driver {
             failure_tail: Some(failure_tail),
         });
         match finalize {
-            Ok(DispatchFinalizeResponse::Replan { wave }) => {
+            Ok(DispatchFinalizeResponse::Replan { wave, reopened }) => {
                 let _ =
                     self.seal
                         .seal_replan_decision(self.round, "rerun-targeted", &(self.clock)());
-                // Same run_id (the kernel kept the run); reset the re-opened
-                // tasks so `process_wave` re-spawns them.
-                for plan in &wave {
-                    if let Err(e) = self.reset_issue_for_replan(&plan.task_id) {
+                // Same run_id (the kernel kept the run). Reset the FULL re-opened
+                // closure — the wave PLUS its downstream dependents released in
+                // later waves — so dependents re-run instead of fast-forwarding
+                // their stale output (a wave-only reset skips them).
+                for id in &reopened {
+                    if let Err(e) = self.reset_issue_for_replan(id) {
                         return FleetStep::Stop(format!("re-plan reset failed: {e}"));
                     }
                 }
