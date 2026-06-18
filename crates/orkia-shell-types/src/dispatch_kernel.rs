@@ -47,6 +47,7 @@ use serde::{Deserialize, Serialize};
 pub const METHOD_AUTHORIZE: &str = "kernel.v1.dispatch.authorize";
 pub const METHOD_ADVANCE: &str = "kernel.v1.dispatch.advance";
 pub const METHOD_ABORT: &str = "kernel.v1.dispatch.abort";
+pub const METHOD_FINALIZE: &str = "kernel.v1.dispatch.finalize";
 
 /// One task as the shell presents it to the kernel: the agent name, the
 /// instruction body, the runtime the shell resolved, plus the DAG fields
@@ -199,6 +200,37 @@ pub struct DispatchAbortRequest {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchAbortResponse {
     pub ok: bool,
+}
+
+/// Params for [`METHOD_FINALIZE`] (SPEC-FLEET-CONVERGENCE-V2, increment 3): the
+/// shell reports the RFC-level integration verdict it computed once the DAG
+/// drained, and asks the brain to converge the run or re-plan it. The accept
+/// command runs shell-side (the brain stays filesystem-free); only its boolean
+/// outcome crosses the wire.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispatchFinalizeRequest {
+    pub run_id: String,
+    /// Whether the integration `[dispatch].accept` passed this round.
+    pub passed: bool,
+    /// The fleet round being finalized (`0` = first integration pass).
+    pub round: u32,
+}
+
+/// Result of [`METHOD_FINALIZE`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum DispatchFinalizeResponse {
+    /// Integration passed: the run is converged and the kernel dropped it.
+    Converged,
+    /// Integration failed: re-run this TARGETED wave (the brain re-opened a
+    /// subgraph). The shell drives it like any other wave; on the next drain it
+    /// finalizes again.
+    Replan { wave: Vec<TaskPlan> },
+    /// The brain declines to re-plan (nothing actionable to re-open): stop.
+    GiveUp { reason: String },
+    /// Unknown / already-closed `run_id`. Fail-closed: the shell falls back to
+    /// its own re-plan path.
+    Failed { reason: String },
 }
 
 #[cfg(test)]

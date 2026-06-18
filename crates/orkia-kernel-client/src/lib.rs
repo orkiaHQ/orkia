@@ -295,6 +295,13 @@ impl KernelRpc for UnixKernelClient {
         self.pipeline_call(dispatch_kernel::METHOD_ABORT, &req)
     }
 
+    fn dispatch_finalize(
+        &self,
+        req: dispatch_kernel::DispatchFinalizeRequest,
+    ) -> Result<dispatch_kernel::DispatchFinalizeResponse, KernelRpcError> {
+        self.pipeline_call(dispatch_kernel::METHOD_FINALIZE, &req)
+    }
+
     fn forge_build(&self, req: ForgeBuildRequest) -> Result<ForgeBuildResponse, KernelRpcError> {
         // The kernel relays a backend LLM build that can run for tens of
         // seconds; give it a generous read ceiling, unlike the fast

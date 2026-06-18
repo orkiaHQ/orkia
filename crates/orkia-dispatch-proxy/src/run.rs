@@ -38,7 +38,8 @@ use std::sync::Arc;
 
 use orkia_shell_types::dispatch_kernel::{
     DispatchAbortRequest, DispatchAdvanceRequest, DispatchAdvanceResponse, DispatchAuthorizeRequest,
-    DispatchAuthorizeResponse, TaskOutcome, TaskOutputRef, TaskPlan,
+    DispatchAuthorizeResponse, DispatchFinalizeRequest, DispatchFinalizeResponse, TaskOutcome,
+    TaskOutputRef, TaskPlan,
 };
 use orkia_shell_types::{
     DaemonJobs, DetachedSpawnRequest, DetachedSpawner, FinalResponseEvent, FinalResponseSource,
@@ -695,6 +696,9 @@ impl Driver {
     /// Runs synchronously: the DAG is drained, so no task is in flight to starve.
     fn finalize_round(&mut self) -> FleetStep {
         let Some(cmd) = self.global_accept.clone() else {
+            // No integration gate: DAG completion is the result. Still finalize
+            // so the kernel drops the (now kept-alive) run.
+            self.notify_kernel_converged();
             return FleetStep::Stop("completed".to_string());
         };
         let result = crate::oracle::run_acceptance(&cmd, self.working_dir.as_deref());
@@ -705,6 +709,7 @@ impl Driver {
             tracing::warn!(run_id = %self.run_id, error = %e, "global verdict seal failed");
         }
         if result.passed() {
+            self.notify_kernel_converged();
             return FleetStep::Stop("converged".to_string());
         }
         // Integration failed — consider a re-plan round.
@@ -724,18 +729,67 @@ impl Driver {
             return FleetStep::Stop("oscillating: integration failure unchanged".to_string());
         }
         self.last_fail_sig = Some(sig);
-        if let Err(e) = self
-            .seal
-            .seal_replan_decision(self.round, "rerun-all", &(self.clock)())
-        {
-            tracing::warn!(run_id = %self.run_id, error = %e, "replan decision seal failed");
-        }
-        match self.replan_rerun_all() {
-            Ok(wave) => {
+        self.replan()
+    }
+
+    /// Tell the kernel the run converged so it drops the kept-alive run (V2 inc
+    /// 3). Best-effort: a kernel without the finalize RPC already dropped the
+    /// run on completion and returns Unavailable — harmless.
+    fn notify_kernel_converged(&self) {
+        let _ = self.kernel.dispatch_finalize(DispatchFinalizeRequest {
+            run_id: self.run_id.clone(),
+            passed: true,
+            round: self.round,
+        });
+    }
+
+    /// Re-plan one round. Prefer the kernel's TARGETED re-open (premium brain):
+    /// it re-opens only the affected subgraph and returns its wave (same
+    /// run_id). Fall back to re-authorizing the whole DAG (the OSS trivial
+    /// brain) when the kernel lacks the finalize RPC. Either way `round`
+    /// advances and a `ReplanDecision` is sealed.
+    fn replan(&mut self) -> FleetStep {
+        let finalize = self.kernel.dispatch_finalize(DispatchFinalizeRequest {
+            run_id: self.run_id.clone(),
+            passed: false,
+            round: self.round,
+        });
+        match finalize {
+            Ok(DispatchFinalizeResponse::Replan { wave }) => {
+                let _ =
+                    self.seal
+                        .seal_replan_decision(self.round, "rerun-targeted", &(self.clock)());
+                // Same run_id (the kernel kept the run); reset the re-opened
+                // tasks so `process_wave` re-spawns them.
+                for plan in &wave {
+                    if let Err(e) = self.reset_issue_for_replan(&plan.task_id) {
+                        return FleetStep::Stop(format!("re-plan reset failed: {e}"));
+                    }
+                }
                 self.round += 1;
                 FleetStep::Replan(wave)
             }
-            Err(e) => FleetStep::Stop(format!("re-plan failed: {e}")),
+            Ok(DispatchFinalizeResponse::GiveUp { reason }) => {
+                FleetStep::Stop(format!("re-plan declined: {reason}"))
+            }
+            Ok(DispatchFinalizeResponse::Converged) => FleetStep::Stop("converged".to_string()),
+            // No finalize RPC (old kernel) or a transport error ⇒ OSS fallback:
+            // re-authorize the whole DAG.
+            _ => {
+                if let Err(e) =
+                    self.seal
+                        .seal_replan_decision(self.round, "rerun-all", &(self.clock)())
+                {
+                    tracing::warn!(run_id = %self.run_id, error = %e, "replan decision seal failed");
+                }
+                match self.replan_rerun_all() {
+                    Ok(wave) => {
+                        self.round += 1;
+                        FleetStep::Replan(wave)
+                    }
+                    Err(e) => FleetStep::Stop(format!("re-plan failed: {e}")),
+                }
+            }
         }
     }
 

@@ -13,7 +13,8 @@ use std::time::{Duration, Instant};
 
 use orkia_shell_types::dispatch_kernel::{
     DispatchAbortRequest, DispatchAbortResponse, DispatchAdvanceRequest, DispatchAdvanceResponse,
-    DispatchAuthorizeRequest, DispatchAuthorizeResponse, TaskPlan,
+    DispatchAuthorizeRequest, DispatchAuthorizeResponse, DispatchFinalizeRequest,
+    DispatchFinalizeResponse, TaskPlan,
 };
 use orkia_shell_types::{
     DaemonJobView, DaemonJobs, DetachedSpawnRequest, DetachedSpawner, FinalResponseCallback,
@@ -33,6 +34,10 @@ pub(crate) struct FakeKernel {
     advances: Mutex<VecDeque<DispatchAdvanceResponse>>,
     pub advance_log: Mutex<Vec<String>>,
     pub aborts: Mutex<u32>,
+    /// When set, `dispatch_finalize(passed=false)` returns this TARGETED wave
+    /// (the premium re-open). `None` ⇒ Unavailable, so the proxy falls back to
+    /// its re-authorize-all path (the default tested by inc-2).
+    finalize_wave: Mutex<Option<Vec<TaskPlan>>>,
 }
 
 impl FakeKernel {
@@ -45,7 +50,13 @@ impl FakeKernel {
             advances: Mutex::new(advances.into()),
             advance_log: Mutex::new(Vec::new()),
             aborts: Mutex::new(0),
+            finalize_wave: Mutex::new(None),
         })
+    }
+
+    /// Make the fake a "premium" brain: a failing finalize re-opens this wave.
+    pub(crate) fn set_finalize_wave(&self, wave: Vec<TaskPlan>) {
+        *self.finalize_wave.lock().unwrap() = Some(wave);
     }
 }
 
@@ -100,6 +111,21 @@ impl KernelRpc for FakeKernel {
     ) -> Result<DispatchAbortResponse, KernelRpcError> {
         *self.aborts.lock().unwrap() += 1;
         Ok(DispatchAbortResponse { ok: true })
+    }
+
+    fn dispatch_finalize(
+        &self,
+        req: DispatchFinalizeRequest,
+    ) -> Result<DispatchFinalizeResponse, KernelRpcError> {
+        if req.passed {
+            return Ok(DispatchFinalizeResponse::Converged);
+        }
+        // A "premium" brain re-opens the configured targeted wave; otherwise
+        // Unavailable, so the proxy falls back to re-authorize-all.
+        match self.finalize_wave.lock().unwrap().clone() {
+            Some(wave) => Ok(DispatchFinalizeResponse::Replan { wave }),
+            None => Err(KernelRpcError::Unavailable("no finalize in this fake".into())),
+        }
     }
 }
 

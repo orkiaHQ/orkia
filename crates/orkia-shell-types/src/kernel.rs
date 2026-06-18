@@ -28,7 +28,8 @@ use crate::forge_kernel::{
 use crate::native::{NativeCompletionRequest, NativeCompletionResponse};
 use crate::dispatch_kernel::{
     DispatchAbortRequest, DispatchAbortResponse, DispatchAdvanceRequest, DispatchAdvanceResponse,
-    DispatchAuthorizeRequest, DispatchAuthorizeResponse,
+    DispatchAuthorizeRequest, DispatchAuthorizeResponse, DispatchFinalizeRequest,
+    DispatchFinalizeResponse,
 };
 use crate::pipeline_kernel::{
     PipelineAbortRequest, PipelineAbortResponse, PipelineAdvanceRequest, PipelineAdvanceResponse,
@@ -310,6 +311,21 @@ pub trait KernelRpc: Send + Sync + 'static {
         let _ = req;
         Err(KernelRpcError::Unavailable(
             "dispatch_abort not implemented by this client".into(),
+        ))
+    }
+
+    /// RFC dispatch (SPEC-FLEET-CONVERGENCE-V2): report the RFC-level
+    /// integration verdict once the DAG drained and ask the brain to converge
+    /// the run or re-plan it (a targeted re-open). Default Unavailable so the
+    /// shell falls back to its own re-plan path against a kernel that predates
+    /// this RPC.
+    fn dispatch_finalize(
+        &self,
+        req: DispatchFinalizeRequest,
+    ) -> Result<DispatchFinalizeResponse, KernelRpcError> {
+        let _ = req;
+        Err(KernelRpcError::Unavailable(
+            "dispatch_finalize not implemented by this client".into(),
         ))
     }
 

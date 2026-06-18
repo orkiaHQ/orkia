@@ -159,6 +159,47 @@ fn integration_fail_then_replan_converges() {
     assert_eq!(rp[0].decision.as_deref(), Some("rerun-all"));
 }
 
+/// The PREMIUM path (V2 inc 3): the kernel re-opens a TARGETED wave via
+/// `dispatch_finalize` instead of the proxy re-authorizing the whole DAG. The
+/// proxy drives that wave and the saga records the re-plan as `rerun-targeted`.
+#[test]
+fn integration_fail_then_targeted_replan_converges() {
+    let dir = tempfile::tempdir().unwrap();
+    let pd = dir.path();
+    let marker = pd.join(".round-marker");
+    let accept = format!(
+        "test -f {m} && exit 0 || {{ touch {m}; exit 1; }}",
+        m = marker.display()
+    );
+    let f = Fakes::new(one_task(), vec![]);
+    // Make the fake a premium brain: a failing finalize re-opens t-a (targeted).
+    f.kernel.set_finalize_wave(vec![plan("r-100", "t-a", "faye", &[])]);
+    let proxy = f.proxy();
+
+    let out = proxy.start_run(request_with_replan(pd, &accept, 2, vec![task("t-a", "faye", &[])]));
+    assert!(matches!(out, DispatchStartOutcome::Started { .. }));
+
+    assert!(wait_for(|| status_is(pd, "t-a", Status::Spawned)));
+    let p1 = write_response(pd, "r0.txt", "round 0");
+    f.responses.fire(done_event(1, "faye", p1));
+    assert!(wait_for(|| f.spawner.count() == 2)); // targeted re-open re-spawned t-a
+
+    let p2 = write_response(pd, "r1.txt", "round 1");
+    f.responses.fire(done_event(2, "faye", p2));
+    assert!(wait_for(|| run_closed(pd).as_deref() == Some("converged")));
+
+    let rp = replan_decisions(pd);
+    assert_eq!(rp.len(), 1);
+    assert_eq!(
+        rp[0].decision.as_deref(),
+        Some("rerun-targeted"),
+        "premium targeted path, not the OSS re-run-all fallback"
+    );
+    let gv = global_verdicts(pd);
+    assert_eq!(gv.len(), 2);
+    assert_eq!(gv[1].passed, Some(true));
+}
+
 /// Integration keeps failing identically → the loop stops (no-progress /
 /// anti-oscillation) instead of thrashing, even with re-plan budget left.
 #[test]
