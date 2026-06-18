@@ -151,6 +151,7 @@ fn rfc_frontmatter_canonical_roundtrips_scope_with_rfc_core() {
         forge: None,
         operator: None,
         scope: Some(Scope::Private),
+        dispatch: None,
     };
     let rendered = render_frontmatter(&fm, "# body\n").unwrap();
     assert!(rendered.contains("scope = \"private\""));
