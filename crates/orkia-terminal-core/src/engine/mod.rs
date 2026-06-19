@@ -422,9 +422,7 @@ impl TerminalEngine {
         // is therefore impossible while this critical section holds.
         let mut child = child.lock();
         if let Ok(Some(_)) = child.try_wait() {
-            return Err(EngineError::Pty(orkia_pty::PtyError::Backend(
-                "child already exited; cannot signal".into(),
-            )));
+            return Err(EngineError::Pty(orkia_pty::PtyError::AlreadyExited));
         }
         let pid = child
             .process_id()

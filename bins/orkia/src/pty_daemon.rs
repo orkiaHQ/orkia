@@ -663,7 +663,14 @@ fn handle_kill(mut stream: UnixStream, state: &mut DaemonState, id: u32, target:
         recovery::handle_kill(stream, state, id);
         return;
     };
-    if let Err(err) = job.engine.signal(libc::SIGTERM) {
+    // Kill requests the end-state "job dead". A child that already
+    // exited (e.g. a prior targeted `kill <id>:@stage` reaped the only
+    // stage) satisfies that goal, so it is success — fall through to
+    // clean up the cache and emit the audit event idempotently, just as
+    // the missing-job branch above does.
+    if let Err(err) = job.engine.signal(libc::SIGTERM)
+        && !err.is_child_already_exited()
+    {
         let _ = write_error(&mut stream, format!("kill job {id}: {err}"));
         return;
     }

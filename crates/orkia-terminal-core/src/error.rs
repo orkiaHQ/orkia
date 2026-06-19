@@ -15,3 +15,12 @@ pub enum EngineError {
     #[error("pty: {0}")]
     Pty(#[from] PtyError),
 }
+
+impl EngineError {
+    /// True when the error is "the child process has already exited".
+    /// Kill paths use this to treat an already-dead child as the
+    /// satisfied end-state rather than a failure.
+    pub fn is_child_already_exited(&self) -> bool {
+        matches!(self, EngineError::Pty(PtyError::AlreadyExited))
+    }
+}

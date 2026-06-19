@@ -68,6 +68,12 @@ pub enum PtyError {
     /// substring-matching the error message.
     #[error("pty: try_wait failed: {0}")]
     Wait(String),
+    /// The child has already exited, so there is no live process to
+    /// signal. Distinct from `Backend` so kill paths can treat an
+    /// already-dead child as the satisfied end-state (process gone)
+    /// instead of an error — without substring-matching the message.
+    #[error("pty: child already exited")]
+    AlreadyExited,
 }
 
 /// Fixed grid geometry helper for the display-only screen `Term`.
