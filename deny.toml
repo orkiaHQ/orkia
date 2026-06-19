@@ -44,10 +44,9 @@ ignore = [
     { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident unmaintained; tauri/forge-viewer only." },
 
     # ── proc-macro chain ────────────────────────────────────────
-    # `paste` and `proc-macro-error` are unmaintained but pulled in
-    # by macro crates at build time only — no runtime exposure.
+    # `proc-macro-error` is unmaintained but pulled in by macro crates
+    # at build time only — no runtime exposure.
     { id = "RUSTSEC-2024-0370", reason = "proc-macro-error unmaintained; build-time only, no runtime exposure." },
-    { id = "RUSTSEC-2024-0436", reason = "paste unmaintained; build-time macro only, no runtime exposure." },
 ]
 
 [licenses]
