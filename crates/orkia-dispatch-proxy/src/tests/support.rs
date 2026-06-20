@@ -127,7 +127,9 @@ impl KernelRpc for FakeKernel {
                 let reopened = wave.iter().map(|p| p.task_id.clone()).collect();
                 Ok(DispatchFinalizeResponse::Replan { wave, reopened })
             }
-            None => Err(KernelRpcError::Unavailable("no finalize in this fake".into())),
+            None => Err(KernelRpcError::Unavailable(
+                "no finalize in this fake".into(),
+            )),
         }
     }
 }

@@ -288,14 +288,8 @@ impl DispatchSeal {
         ts: &str,
     ) -> Result<String, SealError> {
         let prev_hash = self.tip()?.unwrap_or_else(|| ZERO_HASH.to_string());
-        let hash = compute_global_verdict_hash(
-            &prev_hash,
-            round,
-            exit_code,
-            passed,
-            accept_command,
-            ts,
-        );
+        let hash =
+            compute_global_verdict_hash(&prev_hash, round, exit_code, passed, accept_command, ts);
         let record = DispatchSealRecord {
             kind: DecisionKind::GlobalVerdict,
             ts: ts.to_string(),
@@ -589,7 +583,11 @@ mod tests {
         let raw = fs::read_to_string(s.path()).unwrap();
         let mut rec: DispatchSealRecord = serde_json::from_str(raw.trim()).unwrap();
         rec.passed = Some(true);
-        fs::write(s.path(), format!("{}\n", serde_json::to_string(&rec).unwrap())).unwrap();
+        fs::write(
+            s.path(),
+            format!("{}\n", serde_json::to_string(&rec).unwrap()),
+        )
+        .unwrap();
         assert!(!s.verify().unwrap());
     }
 }

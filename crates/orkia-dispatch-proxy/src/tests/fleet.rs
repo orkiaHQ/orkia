@@ -134,7 +134,12 @@ fn integration_fail_then_replan_converges() {
     let f = Fakes::new(one_task(), vec![]); // re-authorize returns the same wave each round
     let proxy = f.proxy();
 
-    let out = proxy.start_run(request_with_replan(pd, &accept, 2, vec![task("t-a", "faye", &[])]));
+    let out = proxy.start_run(request_with_replan(
+        pd,
+        &accept,
+        2,
+        vec![task("t-a", "faye", &[])],
+    ));
     assert!(matches!(out, DispatchStartOutcome::Started { .. }));
 
     // Round 0: task finishes (job 1) → integration fails → re-plan re-spawns (job 2).
@@ -173,10 +178,16 @@ fn integration_fail_then_targeted_replan_converges() {
     );
     let f = Fakes::new(one_task(), vec![]);
     // Make the fake a premium brain: a failing finalize re-opens t-a (targeted).
-    f.kernel.set_finalize_wave(vec![plan("r-100", "t-a", "faye", &[])]);
+    f.kernel
+        .set_finalize_wave(vec![plan("r-100", "t-a", "faye", &[])]);
     let proxy = f.proxy();
 
-    let out = proxy.start_run(request_with_replan(pd, &accept, 2, vec![task("t-a", "faye", &[])]));
+    let out = proxy.start_run(request_with_replan(
+        pd,
+        &accept,
+        2,
+        vec![task("t-a", "faye", &[])],
+    ));
     assert!(matches!(out, DispatchStartOutcome::Started { .. }));
 
     assert!(wait_for(|| status_is(pd, "t-a", Status::Spawned)));
@@ -210,7 +221,12 @@ fn integration_unchanged_failure_stops() {
     let proxy = f.proxy();
 
     // Always fails with identical output → round 1 detects no progress.
-    let out = proxy.start_run(request_with_replan(pd, "exit 1", 3, vec![task("t-a", "faye", &[])]));
+    let out = proxy.start_run(request_with_replan(
+        pd,
+        "exit 1",
+        3,
+        vec![task("t-a", "faye", &[])],
+    ));
     assert!(matches!(out, DispatchStartOutcome::Started { .. }));
 
     assert!(wait_for(|| status_is(pd, "t-a", Status::Spawned)));

@@ -251,7 +251,8 @@ mod tests {
 
     #[test]
     fn stop_carries_last_assistant_message() {
-        let line = r#"{"_source":"claude","hook_event_name":"Stop","last_assistant_message":"PONG"}"#;
+        let line =
+            r#"{"_source":"claude","hook_event_name":"Stop","last_assistant_message":"PONG"}"#;
         let env = try_recover_hook_line(line).expect("recover");
         assert_eq!(env.event.as_deref(), Some("Stop"));
         assert_eq!(

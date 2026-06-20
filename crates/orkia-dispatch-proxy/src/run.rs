@@ -37,9 +37,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use orkia_shell_types::dispatch_kernel::{
-    DispatchAbortRequest, DispatchAdvanceRequest, DispatchAdvanceResponse, DispatchAuthorizeRequest,
-    DispatchAuthorizeResponse, DispatchFinalizeRequest, DispatchFinalizeResponse, TaskOutcome,
-    TaskOutputRef, TaskPlan,
+    DispatchAbortRequest, DispatchAdvanceRequest, DispatchAdvanceResponse,
+    DispatchAuthorizeRequest, DispatchAuthorizeResponse, DispatchFinalizeRequest,
+    DispatchFinalizeResponse, TaskOutcome, TaskOutputRef, TaskPlan,
 };
 use orkia_shell_types::{
     DaemonJobs, DetachedSpawnRequest, DetachedSpawner, FinalResponseEvent, FinalResponseSource,
@@ -436,12 +436,10 @@ impl Driver {
     /// Read a task's issue or fail closed (it must exist by the time we react
     /// to its response/verdict).
     fn read_issue(&self, task_id: &str) -> Result<Issue, DriverError> {
-        self.store
-            .read(task_id)?
-            .ok_or_else(|| DriverError::Spawn {
-                task_id: task_id.to_string(),
-                reason: "issue vanished before its verdict".into(),
-            })
+        self.store.read(task_id)?.ok_or_else(|| DriverError::Spawn {
+            task_id: task_id.to_string(),
+            reason: "issue vanished before its verdict".into(),
+        })
     }
 
     /// Flip a finished task to `Verifying` and run its `accept` oracle on a
@@ -702,10 +700,13 @@ impl Driver {
             return FleetStep::Stop("completed".to_string());
         };
         let result = crate::oracle::run_acceptance(&cmd, self.working_dir.as_deref());
-        if let Err(e) =
-            self.seal
-                .seal_global_verdict(self.round, &cmd, result.exit_code, result.passed(), &(self.clock)())
-        {
+        if let Err(e) = self.seal.seal_global_verdict(
+            self.round,
+            &cmd,
+            result.exit_code,
+            result.passed(),
+            &(self.clock)(),
+        ) {
             tracing::warn!(run_id = %self.run_id, error = %e, "global verdict seal failed");
         }
         if result.passed() {
@@ -723,9 +724,9 @@ impl Driver {
         if self.last_fail_sig.as_deref() == Some(sig.as_str()) {
             // The failure is unchanged since the last round → no progress; stop
             // rather than thrash (anti-oscillation).
-            let _ = self
-                .seal
-                .seal_replan_decision(self.round, "give-up: no progress", &(self.clock)());
+            let _ =
+                self.seal
+                    .seal_replan_decision(self.round, "give-up: no progress", &(self.clock)());
             return FleetStep::Stop("oscillating: integration failure unchanged".to_string());
         }
         self.last_fail_sig = Some(sig);

@@ -25,6 +25,7 @@ pub mod backend;
 pub mod builtin_flags;
 pub mod classifier;
 pub mod decision;
+pub mod dispatch_kernel;
 pub mod error;
 pub mod exec;
 pub mod extensions;
@@ -33,7 +34,6 @@ pub mod forge_kernel;
 pub mod history;
 pub mod input_limits;
 pub mod job;
-pub mod dispatch_kernel;
 pub mod job_config;
 pub mod journal;
 pub mod kernel;
@@ -85,9 +85,9 @@ pub use exec::{
 pub use extensions::{
     AgentPipelineCoordinator, AgentPipelineRequest, AgentPipelineStage, AuthView, DaemonJobView,
     DaemonJobs, DaemonStageView, DetachedCageWrapper, DetachedSpawnRequest, DetachedSpawner,
-    FinalResponseCallback,
-    FinalResponseEvent, FinalResponseSource, JobEventObserver, JournalEnvelopeHook,
-    JournalStopHook, PipelineDispatchOutcome, PipelineProgressCallback, PipelineProgressEvent,
+    FinalResponseCallback, FinalResponseEvent, FinalResponseSource, JobEventObserver,
+    JournalEnvelopeHook, JournalStopHook, PipelineDispatchOutcome, PipelineProgressCallback,
+    PipelineProgressEvent,
 };
 pub use forge_builder::{BuildOutcome, BuilderError, ForgeBuilder, RecentBuild, UsageReport};
 pub use forge_kernel::{

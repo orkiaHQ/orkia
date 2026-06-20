@@ -22,15 +22,15 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::classifier::IntentGuess;
-use crate::forge_kernel::{
-    ForgeBuildRequest, ForgeBuildResponse, ForgeUsageRequest, ForgeUsageResponse,
-};
-use crate::native::{NativeCompletionRequest, NativeCompletionResponse};
 use crate::dispatch_kernel::{
     DispatchAbortRequest, DispatchAbortResponse, DispatchAdvanceRequest, DispatchAdvanceResponse,
     DispatchAuthorizeRequest, DispatchAuthorizeResponse, DispatchFinalizeRequest,
     DispatchFinalizeResponse,
 };
+use crate::forge_kernel::{
+    ForgeBuildRequest, ForgeBuildResponse, ForgeUsageRequest, ForgeUsageResponse,
+};
+use crate::native::{NativeCompletionRequest, NativeCompletionResponse};
 use crate::pipeline_kernel::{
     PipelineAbortRequest, PipelineAbortResponse, PipelineAdvanceRequest, PipelineAdvanceResponse,
     PipelineAuthorizeRequest, PipelineAuthorizeResponse,

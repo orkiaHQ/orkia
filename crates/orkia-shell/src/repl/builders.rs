@@ -421,11 +421,12 @@ impl Repl {
                 policy_path,
             });
         }
-        resolve_detached_cage(&self.config, agent)
-            .map(|(cage_bin, policy_path)| crate::job::CageWrapper {
+        resolve_detached_cage(&self.config, agent).map(|(cage_bin, policy_path)| {
+            crate::job::CageWrapper {
                 cage_bin,
                 policy_path,
-            })
+            }
+        })
     }
 
     /// The cage wrapper for `agent` as the transport type a [`DetachedSpawnRequest`]

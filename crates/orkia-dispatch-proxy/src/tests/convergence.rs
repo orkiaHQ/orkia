@@ -144,7 +144,11 @@ fn fails_max_attempts_then_rejected() {
     // advance has definitely happened before we read its log (no race).
     assert!(wait_for(|| run_closed(pd).is_some()));
     assert_eq!(f.spawner.count(), 2, "max_attempts spawns");
-    assert_eq!(f.kernel.advance_log.lock().unwrap().len(), 1, "one Failed advance");
+    assert_eq!(
+        f.kernel.advance_log.lock().unwrap().len(),
+        1,
+        "one Failed advance"
+    );
 
     let verdicts: Vec<_> = seal_records(pd)
         .into_iter()
@@ -214,6 +218,10 @@ fn resume_reruns_oracle_for_verifying_task() {
 
     assert!(wait_for(|| status_is(pd, "impl", Status::Verified)));
     assert!(wait_for(|| run_closed(pd).is_some()));
-    assert_eq!(f.spawner.count(), 0, "resume must not re-spawn a finished agent");
+    assert_eq!(
+        f.spawner.count(),
+        0,
+        "resume must not re-spawn a finished agent"
+    );
     assert_eq!(f.kernel.advance_log.lock().unwrap().len(), 1);
 }

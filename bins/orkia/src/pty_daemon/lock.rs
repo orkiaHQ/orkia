@@ -174,7 +174,10 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(became_zombie, "child {pid} should be a zombie before reaping");
+        assert!(
+            became_zombie,
+            "child {pid} should be a zombie before reaping"
+        );
 
         let dir = tempfile::tempdir().expect("tempdir");
         std::fs::create_dir_all(dir.path().join("run")).expect("mkdir run");
