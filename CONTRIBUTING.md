@@ -76,7 +76,7 @@ Each RFC maps to a state in its frontmatter and to a label on its PR.
 | `draft`         | `rfc:draft`        | Under discussion. Author iterates in response to review.      | Squash-merge when consensus.     |
 | `active`        | `rfc:active`       | Merged, implementation in flight.                             | Author bumps `state` in a follow-up commit on merge. |
 | `completed`     | `rfc:completed`    | All Acceptance Criteria met; implementation PRs merged.       | Bump `state`, move file under `rfcs/completed/`.     |
-| `abandoned`     | `rfc:abandoned`    | Dropped. Document the reason in `## Context`.                 | Bump `state` and move under `rfcs/completed/` (we keep abandoned RFCs as historical record). |
+| `abandoned`     | `rfc:abandoned`    | Dropped. Document the reason in `## Context`.                 | Bump `state` and move under `rfcs/abandoned/` (we keep abandoned RFCs as historical record). |
 
 `draft` is the contributor-friendly alias for the internal canonical
 state `draft-active` (see [`docs/rfc-primitive.md`](docs/rfc-primitive.md)).
